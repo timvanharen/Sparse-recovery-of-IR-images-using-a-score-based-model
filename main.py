@@ -20,7 +20,7 @@ print(f"Using device: {device}")
 task = 'train' # 'test  # Task name
 batch_size = 32
 num_epochs = 10
-learning_rate = 1e-4
+learning_rate = 1e-3
 num_measurements = 32
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -192,10 +192,10 @@ class ImageScoreNet(nn.Module):
 # =====================
 # 4. Training Loop (Image-optimized)
 # =====================
-def train_score_model(dataset, batch_size=32, num_epochs=10):
+def train_score_model(dataset, batch_size=32, num_epochs=10, lr = 1e-4):
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     model = ImageScoreNet(input_dim=128).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
     
     loss_stopping_criterion = 1.3e-6
     for epoch in range(num_epochs):
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     # 2. Train score model
     if task == 'train':
         print("Training score model...")
-        score_model = train_score_model(train_dataset, batch_size=batch_size)
+        score_model = train_score_model(train_dataset, batch_size=batch_size, lr=learning_rate)
         torch.save(score_model.state_dict(), 'image_score_model.pth')
     else: # Load pre-trained model
         print("Loading pre-trained score model...")
@@ -332,7 +332,7 @@ if __name__ == "__main__":
         score_model.eval()
     
     # 3. Test reconstruction
-    test_generator = CSImageGenerator(test_dataset, M=batch_size, snr_db=20) #batch_size=32, 
+    test_generator = CSImageGenerator(test_dataset, M=num_measurements, snr_db=20) #batch_size=32, 
     lr_dct, hr_dct = test_dataset[0]  # Get first test sample
     print(f"Low Res DCT shape: {lr_dct.shape}, High Res DCT shape: {hr_dct.shape}")
 
