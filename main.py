@@ -18,7 +18,7 @@ print(f"Using device: {device}")
 
 # Global configuration variables
 task = 'train' # 'test  # Task name
-batch_size = 4
+batch_size = 32
 num_epochs = 10
 learning_rate = 1e-4
 num_measurements = 32
@@ -29,6 +29,14 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 print("Configuration:")
 for k, v in config.items():
     print(f"{k}: {v}")
+
+# TODO:
+# - Where is the gradient of the log likelihood and how can we test that it works?
+# - How to add noise to the measurements? (Gaussian noise, Poisson noise, etc.)
+# - How does the reconstruction work? Is it possible to compare with annealed Langevin dynamics existing code?
+# - How to add the SNR to the measurements? (e.g. using a Gaussian noise model)
+# - How can we show pictures of the creation process? (e.g. using matplotlib or OpenCV)
+# - What happens if we use a lower resolution image? To train a bit faster?
 
 # =====================
 # 1. Image Data Loading
@@ -62,9 +70,13 @@ class ImageDataset(Dataset):
         hr_img = hr_img.astype(np.float32) / 255.0
         
         # Convert to DCT domain
-        lr_dct = cv2.dct(np.float32(lr_img), cv2.DCT_INVERSE)
-        hr_dct = cv2.dct(np.float32(hr_img), cv2.DCT_INVERSE)
+        lr_dct = cv2.dct(np.float32(lr_img))
+        hr_dct = cv2.dct(np.float32(hr_img))
 
+        # Show the DCT images for debugging
+        # cv2.imshow('High Res DCT', hr_dct)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
         # lr_dct = dctn(lr_img) # norm='ortho'
         # hr_dct = dctn(hr_img) # norm='ortho'
         
@@ -180,12 +192,12 @@ class ImageScoreNet(nn.Module):
 # =====================
 # 4. Training Loop (Image-optimized)
 # =====================
-def train_score_model(dataset, batch_size=4, num_epochs=10):
+def train_score_model(dataset, batch_size=32, num_epochs=10):
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     model = ImageScoreNet(input_dim=128).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=1e-4)
     
-    loss_stopping_criterion = 1.3
+    loss_stopping_criterion = 1.3e-6
     for epoch in range(num_epochs):
         model.train()
         epoch_loss = 0
@@ -197,15 +209,26 @@ def train_score_model(dataset, batch_size=4, num_epochs=10):
 
             # Move to device and add channel dimension
             hr_dct = hr_dct.unsqueeze(1).to(device)  # (batch, 1, h, w)
-            
+            # print("hr_dct.shape:", hr_dct.shape)
+            # show_resized_dct_image(hr_dct[0, 0].cpu().numpy(), "hr_dct")
+
             # Add noise
-            sigma = torch.rand(hr_dct.shape[0], device=device) * 0.5
+            sigma = torch.rand(hr_dct.shape[0], device=device) * 0.2
+            # print("sigma.shape:", sigma.shape)
+
             noise = torch.randn_like(hr_dct) * sigma.view(-1, 1, 1, 1)
+            # print("noise.shape:", noise.shape)
+
             noisy_dct = hr_dct + noise
             # print("noisy_dct shape:", noisy_dct.shape)
-            
+
+            # show_resized_dct_image(noisy_dct[0, 0].cpu().numpy(), "Noisy")
+
             # Score matching
             target = -noise / (sigma.view(-1, 1, 1, 1) + 1e-5)
+            # print("target shape:", target.shape)
+            # show_resized_dct_image(target[0, 0].cpu().numpy(), "target", wait=True)
+
             pred = model(noisy_dct, sigma)
             loss = torch.mean((pred - target)**2)
 
@@ -264,6 +287,20 @@ def reconstruct_image(y, P, model, img_shape, steps=200):
     #reconstructed_img = idctn(reconstructed_dct, norm='ortho')
     return np.clip(reconstructed_img, 0, 1)
 
+def show_resized_dct_image(img_dct, title, wait=False):
+    # let's upscale the image using new  width and height
+    image = cv2.idct(img_dct)
+    up_width = 600
+    up_height = 400
+    up_points = (up_width, up_height)
+    resized_up = cv2.resize(image, up_points, interpolation= cv2.INTER_LINEAR)
+    resized_up_DCT = cv2.resize(img_dct, up_points, interpolation= cv2.INTER_LINEAR)
+    cv2.imshow(title, resized_up)
+    cv2.imshow(title + ' DCT', resized_up_DCT)
+    if wait:
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
 # =====================
 # Main Workflow
 # =====================
@@ -271,12 +308,12 @@ if __name__ == "__main__":
     # 1. Load datasets
     train_dataset = ImageDataset(
         low_res_dir='images/low_res_train/LR_train',
-        high_res_dir='images/high_res_train/HR_train'
+        high_res_dir='images/medium_res_train/MR_train' #high_res_dir='images/high_res_train/HR_train'
     )
     
     test_dataset = ImageDataset(
         low_res_dir='images/low_res_test/LR_test',
-        high_res_dir='images/high_res_test/HR_test'
+        high_res_dir='images/medium_res_test/MR_test' #high_res_dir='images/high_res_test/HR_test'
     )
 
     # Print dataset sizes
@@ -286,7 +323,7 @@ if __name__ == "__main__":
     # 2. Train score model
     if task == 'train':
         print("Training score model...")
-        score_model = train_score_model(train_dataset)
+        score_model = train_score_model(train_dataset, batch_size=batch_size)
         torch.save(score_model.state_dict(), 'image_score_model.pth')
     else: # Load pre-trained model
         print("Loading pre-trained score model...")
@@ -295,7 +332,7 @@ if __name__ == "__main__":
         score_model.eval()
     
     # 3. Test reconstruction
-    test_generator = CSImageGenerator(test_dataset, M=4, snr_db=20) #batch_size=32, 
+    test_generator = CSImageGenerator(test_dataset, M=batch_size, snr_db=20) #batch_size=32, 
     lr_dct, hr_dct = test_dataset[0]  # Get first test sample
     print(f"Low Res DCT shape: {lr_dct.shape}, High Res DCT shape: {hr_dct.shape}")
 
