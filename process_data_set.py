@@ -11,6 +11,8 @@ TEST_RATIO = 0.2
 data_dir = "images\data\data"
 HR_train_data_output_dir = ".\images\high_res_train\HR_train\\"
 HR_test_data_output_dir = ".\images\high_res_test\HR_test\\"
+frikandel_train_data_output_dir = ".\images\\frikandel_train\\frikandel_train\\"
+frikandel_test_data_output_dir = ".\images\\frikandel_test\\frikandel_test\\"
 MR_train_data_output_dir = ".\images\medium_res_train\MR_train\\"
 MR_test_data_output_dir = ".\images\medium_res_test\MR_test\\"
 LR_train_data_output_dir = ".\images\low_res_train\LR_train\\"
@@ -19,6 +21,8 @@ LR_test_data_output_dir = ".\images\low_res_test\LR_test\\"
 # Also make a directory for the discrete cosine transform of all the images
 DCT_HR_train_data_output_dir = ".\images\dct_high_res_train\DCT_HR_train\\"
 DCT_HR_test_data_output_dir = ".\images\dct_high_res_test\DCT_HR_test\\"
+DCT_frikandel_train_data_output_dir = ".\images\dct_frikandel_train\DCT_frikandel_train\\"
+DCT_frikandel_test_data_output_dir = ".\images\dct_frikandel_test\DCT_frikandel_test\\"
 DCT_MR_train_data_output_dir = ".\images\dct_medium_res_train\DCT_MR_train\\"
 DCT_MR_test_data_output_dir = ".\images\dct_medium_res_test\DCT_MR_test\\"
 DCT_LR_train_data_output_dir = ".\images\dct_low_res_train\DCT_LR_train\\"
@@ -92,10 +96,17 @@ if not os.path.exists(HR_train_data_output_dir):
     os.makedirs(HR_train_data_output_dir)
 if not os.path.exists(HR_test_data_output_dir):
     os.makedirs(HR_test_data_output_dir)
+
+if not os.path.exists(frikandel_train_data_output_dir):
+    os.makedirs(frikandel_train_data_output_dir)
+if not os.path.exists(frikandel_test_data_output_dir):
+    os.makedirs(frikandel_test_data_output_dir)
+
 if not os.path.exists(MR_train_data_output_dir):
     os.makedirs(MR_train_data_output_dir)
 if not os.path.exists(MR_test_data_output_dir):
     os.makedirs(MR_test_data_output_dir)
+
 if not os.path.exists(LR_train_data_output_dir):
     os.makedirs(LR_train_data_output_dir)
 if not os.path.exists(LR_test_data_output_dir):
@@ -104,6 +115,8 @@ if not os.path.exists(LR_test_data_output_dir):
 # Check how much files are already in the directories
 print("Number of files in HR_train_data_output_dir: ", len(os.listdir(HR_train_data_output_dir)))
 print("Number of files in HR_test_data_output_dir: ", len(os.listdir(HR_test_data_output_dir)))
+print("Number of files in frikandel_train_data_output_dir: ", len(os.listdir(frikandel_train_data_output_dir)))
+print("Number of files in frikandel_test_data_output_dir: ", len(os.listdir(frikandel_test_data_output_dir)))
 print("Number of files in MR_train_data_output_dir: ", len(os.listdir(MR_train_data_output_dir)))
 print("Number of files in MR_test_data_output_dir: ", len(os.listdir(MR_test_data_output_dir)))
 print("Number of files in LR_train_data_output_dir: ", len(os.listdir(LR_train_data_output_dir)))
@@ -149,7 +162,68 @@ for file in test_data:
 
         image_count += 1
 
-# Do it for a medium resolution image as well
+# ====
+# Frikandel res
+# ====
+
+image = cv2.imread(os.path.join(data_dir, train_data[0]))
+
+print("Size of image: ", image.shape)
+factor = np.sqrt(2)
+rows = (image.shape[1]//factor).astype(int)
+cols = (image.shape[0]//factor).astype(int)
+print("rows: ", rows)
+print("cols: ", cols)
+
+image_count = len(os.listdir(frikandel_train_data_output_dir))
+print("Images stored in frikandel_res_train: ", image_count)
+for file in train_data:
+    if image_count < MAX_IMAGE:
+        # Read the image file
+        image = cv2.imread(os.path.join(data_dir, file))
+        
+        # Downsample the image
+        downsampled_image = downsample_image(image, rows, cols)
+
+        # Change the name to a numbered name
+        new_file = "frikandel_res_train_" + str(train_data.index(file)) + ".jpg"
+        
+        # Write the downsampled image to the frikandel resolution training directory
+        cv2.imwrite(os.path.join(frikandel_train_data_output_dir, new_file), downsampled_image)
+
+        # Print the progress every 100 images
+        if train_data.index(file) % 100 == 0 and train_data.index(file) < MAX_IMAGE:
+            print("progress: ", train_data.index(file))
+        
+        image_count += 1
+
+image_count = len(os.listdir(frikandel_test_data_output_dir))
+print("Images stored in frikandel_res_test: ", image_count)
+for file in test_data:
+    if image_count < MAX_IMAGE*TEST_RATIO:
+        # Read the image file
+        image = cv2.imread(os.path.join(data_dir, file))
+        
+        # Downsample the image
+        downsampled_image = downsample_image(image, rows, cols)
+
+        # Change the name to a numbered name
+        new_file = "frikandel_res_test_" + str(test_data.index(file)) + ".jpg"
+        
+        # Write the downsampled image to the frikandel resolution testing directory
+        cv2.imwrite(os.path.join(frikandel_test_data_output_dir, new_file), downsampled_image)
+
+        # Print the progress every 100 images
+        if test_data.index(file) % 100 == 0 and test_data.index(file) < MAX_IMAGE:
+            print("progress: ", test_data.index(file))
+
+        image_count += 1
+
+# ====
+# medium res
+# ====
+
+# Do it for a frikandel resolution image as well
 # First load one image to get the size of the downsampled image
 image = cv2.imread(os.path.join(data_dir, train_data[0]))
 
