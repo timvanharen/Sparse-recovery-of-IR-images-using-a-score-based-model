@@ -48,6 +48,7 @@ for k, v in config.items():
 # - Find out why:
 #    - gradients are only in one axis direction
 #    - the output image shows a cross in the middle of the image
+# - Fix the names of the h and y bitches
 
 # =====================
 # Dataset Class
@@ -90,7 +91,7 @@ class ImageDataset(Dataset):
         # cv2.destroyAllWindows()
         # lr_dct = dctn(lr_img) # norm='ortho'
         # hr_dct = dctn(hr_img) # norm='ortho'
-        return torch.tensor(lr_img), torch.tensor(hr_img)
+        return torch.tensor(lr_img), torch.tensor(hr_img) # Train with dense representation / image
         return torch.tensor(lr_dct), torch.tensor(hr_dct)
 
 # =====================
@@ -137,20 +138,20 @@ class CSImageGenerator:
         #     # Now print the difference
         #     print("Difference:", y - lr_img.flatten())
             
-        # Create M measurements from lr_img pertubed with noise to make y
-        # First generate M times lr_img like noise 
-        noise = torch.randn(self.M, N, device=device) / np.sqrt(self.M)
-        print(f"Generated noise with shape: {noise.shape}")
+        # # Create M measurements from lr_img pertubed with noise to make y
+        # # First generate M times lr_img like noise 
+        # noise = torch.randn(self.M, N, device=device) / np.sqrt(self.M)
+        # print(f"Generated noise with shape: {noise.shape}")
 
-        # Add noise to the measurements
-        y_clean = y.squeeze()  # Remove the extra dimension
-        y = torch.zeros(self.M, N, device=device)  # Initialize y with zeros
-        print(f"Generated y with shape: {y.shape}")
-        print(f"y_clean shape: {y_clean.shape}")
-        print(f"noise shape: {noise[0].shape}")
-        for i in range(self.M):
-            y[i] = y_clean + noise[i]  # Add noise to each measurement
-        print(f"Generated measurements y with shape: {y.shape}")
+        # # Add noise to the measurements
+        # y_clean = y.squeeze()  # Remove the extra dimension
+        # y = torch.zeros(self.M, N, device=device)  # Initialize y with zeros
+        # print(f"Generated y with shape: {y.shape}")
+        # print(f"y_clean shape: {y_clean.shape}")
+        # print(f"noise shape: {noise[0].shape}")
+        # for i in range(self.M):
+        #     y[i] = y_clean + noise[i]  # Add noise to each measurement
+        # print(f"Generated measurements y with shape: {y.shape}")
 
         return y, P
 
@@ -391,25 +392,25 @@ def annealed_langevin_dynamics(y, P, model, img_shape, steps_per_noise=100):
         step_size = sigma**2/1 #* 0.01  # Adjust this value as needed
         
         for step in range(steps_per_noise):
+            
             # Data fidelity term
             h_flat = current_h.view(-1) # Flatten the current estimate from ([1, 1, 128, 160]) to ([20480])
             # print("h_flat.shape:", h_flat.shape)
             # print("current_h.shape:", current_h.shape)
             residual = y - P @ h_flat
             grad_likelihood = residual @ P
-            # print("grad_likelihood.shape:", grad_likelihood.shape)
+            print("grad_likelihood.shape:", grad_likelihood.shape)
             # show_resized_dct_image(grad_likelihood[0, 0].detach().cpu().numpy(), f"Gradlikelihood Step {step}", wait=True)
-
             # Prior term
             with torch.no_grad():
                 score = model(current_h, sigma * torch.ones(1, device=device))
             # show_resized_dct_image(score[0, 0].detach().cpu().numpy(), f"score Step {step}", wait=True)
-            # print("score.shape:", score.shape)
+            print("score.shape:", score.shape)
 
             # Langevin update
             noise_term = torch.sqrt(2 * step_size) * torch.randn_like(current_h)
             # show_resized_dct_image(noise_term[0, 0].detach().cpu().numpy(), f"noise_term Step {step}", wait=True)
-            # print("noise_term.shape:", noise_term.shape)
+            print("noise_term.shape:", noise_term.shape)
             
             # print("torch.mean(grad_likelihood.view_as(current_h),0).shape:", torch.mean(grad_likelihood, 0).view_as(current_h).shape) # TODO: check if this is correct
             current_h = current_h + step_size * (score + torch.mean(grad_likelihood, 0).view_as(current_h)) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
@@ -537,15 +538,31 @@ if __name__ == "__main__":
     else: # Load pre-trained model
         print("Loading pre-trained score model...")
         ncsn_model = NCSN(dataset.img_hr_height, dataset.img_hr_width).to(device)
-        ncsn_model.load_state_dict(torch.load('ncsn_model_100epoch_32batch_1e-3lr_.pth'))
+        ncsn_model.load_state_dict(torch.load('ncsn_model_img_new_loss_100epoch_32batch_1e-3lr_2Anneal_power_.pth'))
         ncsn_model.eval()
     
     # Test reconstruction
     test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
     lr_dct, hr_dct = dataset[0]
-    lr_img = cv2.idct(lr_dct.numpy())
-    y, P = test_generator.make_measurements(lr_img, hr_dct)
+    reduction_factor = 0.8
+    print("size of hr_dct:", hr_dct.detach().cpu().numpy().shape)
+    print("int(hr_dct.shape[0]*reduction_factor):", int(hr_dct.shape[0]*reduction_factor))
+    print("int(hr_dct.shape[1]*reduction_factor):", int(hr_dct.shape[1]*reduction_factor))
+    hr_dct_half = cv2.resize(hr_dct.detach().cpu().numpy(), (int(hr_dct.shape[1]*reduction_factor), int(hr_dct.shape[0]*reduction_factor)))
+    print("size of hr_dct_half:", hr_dct_half.shape)
+    # cv2.imshow('High Res DCT Half', hr_dct_half)
+    # cv2.waitKey(0)
+
+    # TODO:
+    # - OMP
+    # - Train model with known distruvtion bernouli gaussian
+    # - Reconstruct with a lot of measurements
+
+    #lr_img = cv2.idct(lr_dct.numpy())
+    y, P = test_generator.make_measurements(hr_dct_half, hr_dct) #lr_dct
     
+    print("y.shape:", y.shape)
+    print("P.shape:", P.shape)
     # Evaluate both methods
     results = reconstruct_and_evaluate(y, P, ncsn_model, hr_dct)
 
