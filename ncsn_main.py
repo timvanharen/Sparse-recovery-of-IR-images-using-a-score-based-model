@@ -90,6 +90,7 @@ class ImageDataset(Dataset):
         # cv2.destroyAllWindows()
         # lr_dct = dctn(lr_img) # norm='ortho'
         # hr_dct = dctn(hr_img) # norm='ortho'
+        return torch.tensor(lr_img), torch.tensor(hr_img)
         return torch.tensor(lr_dct), torch.tensor(hr_dct)
 
 # =====================
