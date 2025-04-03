@@ -24,6 +24,7 @@ sigma_min = 0.01
 sigma_max = 1.0
 num_measurements = 32 # Number of measurements
 snr_db = 20 # Signal-to-noise ratio in dB
+anneal_power = 2. # Annealing power for Langevin dynamics
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -44,6 +45,9 @@ for k, v in config.items():
 # - Save checkpoints during training and save in a dedicated folder (e.g. 'checkpoints/')
 # - FInd out which architerture must be used for the NCSN model (e.g. UNet, ResNet, etc.)
 # - Structure the code base and remove unused code and files
+# - Find out why:
+#    - gradients are only in one axis direction
+#    - the output image shows a cross in the middle of the image
 
 # =====================
 # Dataset Class
@@ -97,8 +101,9 @@ class CSImageGenerator:
         self.M = M          # Measurements
         self.snr_db = snr_db
         
-    def make_measurements(self, lr_dct, hr_dct):
-        N = lr_dct.numel()
+    def make_measurements(self, lr_img, hr_dct):
+        print("lr_img.shape:", lr_img.shape)
+        N = lr_img.shape[0]*lr_img.shape[1]  # Number of pixels in the image
 
         print(f"Generating measurements for N={N} and M={self.M}")
         # Ensure M < N
@@ -106,31 +111,34 @@ class CSImageGenerator:
             raise ValueError("Number of measurements M must be less than the number of pixels N.")
         
         # Print shapes
-        print(f"lr_dct shape: {lr_dct.shape}")
+        print(f"lr_img shape: {lr_img.shape}")
         print(f"hr_dct shape: {hr_dct.shape}")
+
         # Calculate the sensing matrix
-        y = lr_dct.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
+        # First move the lr_img to a tensor and device
+        lr_img = torch.tensor(lr_img, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        y = lr_img.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
         h = hr_dct.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
-        P = (y*torch.linalg.pinv(h)).to(device) # Pseudo-inverse for sensing matrix
-        y = P @ h
+        P = (y*torch.linalg.pinv(h)).to(device)  # Pseudo-inverse for sensing matrix
+        y = P @ h # P Must be a DCT transformation and downscaling measurement matrix.
         print(f"y shape: {y.shape}")
         print(f"P shape: {P.shape}")
-        print("lr_dct.flatten():", lr_dct.flatten())
+        print("lr_img.flatten():", lr_img.flatten())
         print("y:", y)
         print("P:", P)
         print("P.shape:", P.shape)
 
-        # # check if y and lr_dct.flatten() are equal
-        # if torch.allclose(y, lr_dct.flatten(), atol=1e-6):
-        #     print("y and lr_dct.flatten() are equal.")
+        # # check if y and lr_img.flatten() are equal
+        # if torch.allclose(y, lr_img.flatten(), atol=1e-6):
+        #     print("y and lr_img.flatten() are equal.")
         # else:
-        #     print("y and lr_dct.flatten() are NOT equal.")
+        #     print("y and lr_img.flatten() are NOT equal.")
         #     # Now print the difference
-        #     print("Difference:", y - lr_dct.flatten())
+        #     print("Difference:", y - lr_img.flatten())
             
-        # Create M measurements from lr_dct pertubed with noise to make y
-        # First generate M times lr_dct like noise 
-        noise = torch.randn(self.M, N, device=device)
+        # Create M measurements from lr_img pertubed with noise to make y
+        # First generate M times lr_img like noise 
+        noise = torch.randn(self.M, N, device=device) / np.sqrt(self.M)
         print(f"Generated noise with shape: {noise.shape}")
 
         # Add noise to the measurements
@@ -200,26 +208,26 @@ class NCSN(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 64, 3, padding=1),
             nn.GroupNorm(8, 64),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Conv2d(64, 128, 3, padding=1, stride=2),
             nn.GroupNorm(8, 128),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Conv2d(128, 256, 3, padding=1, stride=2),
             nn.GroupNorm(8, 256),
-            nn.SiLU()
+            nn.ReLU()
         )
         self.sigma_embed = nn.Sequential(
             nn.Linear(1, 256),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(256, 256)
         )
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(256 + 256, 128, 3, padding=1, output_padding=1, stride=2),
             nn.GroupNorm(8, 128),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 3, padding=1, output_padding=1, stride=2),
             nn.GroupNorm(8, 64),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Conv2d(64, 1, 3, padding=1)
         )
         
@@ -287,7 +295,7 @@ def plot_gradients(model):
 # =====================
 # Training with Noise Conditioning
 # =====================
-def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0.01, sigma_max=1.0, lr = 1e-4, loss_stopping_criterion=1.3e-6):
+def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0.01, sigma_max=1.0, lr = 1e-4, loss_stopping_criterion=1.3e-6, anneal_power=2.):
     print("\nTraining NCSN model...")
     noise_schedule = NoiseSchedule(num_scales=num_epochs, sigma_min=sigma_min, sigma_max=sigma_max)
     model = NCSN(dataset.img_hr_height, dataset.img_hr_width).to(device)
@@ -312,13 +320,14 @@ def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0
             noisy_dct = hr_dct + noise * sigma.view(-1, 1, 1, 1)  # Scale noise by sigma
 
             # Compute score target (-noise/sigma)
-            target = -noise / (sigma.view(-1, 1, 1, 1) + 1e-5)
+            target = -noise / (sigma.view(-1, 1, 1, 1)**2) # + 1e-5 # Avoid division by zero
             
             # Forward pass
             pred = model(noisy_dct, sigma)
             
             # Loss with 1/sigma^2 weighting (importance weighting)
-            loss = torch.mean((pred - target)**2 / (sigma.view(-1, 1, 1, 1)**2))
+            loss = torch.mean(1/2.* ((pred - target)**2).sum(dim = (2,3)) * sigma ** anneal_power)
+            #loss = torch.mean((pred - target)**2 / (sigma.view(-1, 1, 1, 1)**2))
             
             # Backward pass
             optimizer.zero_grad()
@@ -336,8 +345,8 @@ def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0
                 print(f"Epoch {epoch+1}/{num_epochs} | Batch {batch_idx}/{len(dataloader)} "
                       f"| Loss: {loss.item():.4f} | Sigma: {sigma.mean().item():.4f}±{sigma.std().item():.4f}")
         
-        show_resized_dct_image(hr_dct[0, 0].detach().cpu().numpy(), "original DCT", wait=True)
-        show_resized_dct_image(noisy_dct[0, 0].detach().cpu().numpy(), "noisy DCT", wait=True)
+        show_resized_dct_image(hr_dct[0, 0].detach().cpu().numpy(), "train original", wait=True)
+        show_resized_dct_image(noisy_dct[0, 0].detach().cpu().numpy(), "train noisy", wait=True)
 
         # Model training evaluation
         if epoch % 1 == 0:  # Every epoch
@@ -371,14 +380,14 @@ def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0
 # =====================
 def annealed_langevin_dynamics(y, P, model, img_shape, steps_per_noise=100):
     noise_schedule = NoiseSchedule()
-    current_h = torch.randn(1, 1, *img_shape, device=device, requires_grad=True)
-    # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), "initial DCT", wait=True)
+    current_h = torch.rand(1, 1, *img_shape, device=device, requires_grad=True)
+    # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), "initial current h", wait=True)
     # Store reconstruction process
     reconstruction_process = []
     
     for sigma in reversed(noise_schedule.sigmas):
         # Step size depends on noise level
-        step_size = sigma**2 #* 0.01  # Adjust this value as needed
+        step_size = sigma**2/1 #* 0.01  # Adjust this value as needed
         
         for step in range(steps_per_noise):
             # Data fidelity term
@@ -388,29 +397,39 @@ def annealed_langevin_dynamics(y, P, model, img_shape, steps_per_noise=100):
             residual = y - P @ h_flat
             grad_likelihood = residual @ P
             # print("grad_likelihood.shape:", grad_likelihood.shape)
+            # show_resized_dct_image(grad_likelihood[0, 0].detach().cpu().numpy(), f"Gradlikelihood Step {step}", wait=True)
 
             # Prior term
             with torch.no_grad():
                 score = model(current_h, sigma * torch.ones(1, device=device))
+            # show_resized_dct_image(score[0, 0].detach().cpu().numpy(), f"score Step {step}", wait=True)
             # print("score.shape:", score.shape)
 
             # Langevin update
             noise_term = torch.sqrt(2 * step_size) * torch.randn_like(current_h)
+            # show_resized_dct_image(noise_term[0, 0].detach().cpu().numpy(), f"noise_term Step {step}", wait=True)
             # print("noise_term.shape:", noise_term.shape)
             
             # print("torch.mean(grad_likelihood.view_as(current_h),0).shape:", torch.mean(grad_likelihood, 0).view_as(current_h).shape) # TODO: check if this is correct
             current_h = current_h + step_size * (score + torch.mean(grad_likelihood, 0).view_as(current_h)) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
+            # for i in range(grad_likelihood.shape[0]):
+            #     current_h = current_h + step_size * (score + grad_likelihood[i].view_as(current_h)) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
+            # # normalize the current_h to be in the range of [0, 1]
+            # current_h = torch.clamp(current_h, 0, 1)
             
             if step % 20 == 0:
                 reconstruction_process.append(current_h.detach().cpu().numpy())
 
-        show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"Step {step}", wait=True)
+        # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
         print("current_h.shape:", current_h.shape)
     
     # Final reconstruction
     reconstructed_dct = current_h.squeeze().detach().cpu().numpy()
+    cv2.imshow('Reconstructed DCT', reconstructed_dct)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
     reconstructed_img = cv2.idct(reconstructed_dct)
-    return np.clip(reconstructed_img, 0, 1), reconstruction_process
+    return reconstructed_img, reconstruction_process
 
 # =====================
 # Evaluation Metrics
@@ -512,7 +531,7 @@ if __name__ == "__main__":
     if task == 'train':
         print("Training score model...")
         ncsn_model = train_ncsn(dataset, batch_size=batch_size, lr=learning_rate, num_epochs=num_epochs, 
-                                num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max)
+                                num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
         torch.save(ncsn_model.state_dict(), 'ncsn_model.pth')
     else: # Load pre-trained model
         print("Loading pre-trained score model...")
@@ -523,7 +542,8 @@ if __name__ == "__main__":
     # Test reconstruction
     test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
     lr_dct, hr_dct = dataset[0]
-    y, P = test_generator.make_measurements(lr_dct, hr_dct)
+    lr_img = cv2.idct(lr_dct.numpy())
+    y, P = test_generator.make_measurements(lr_img, hr_dct)
     
     # Evaluate both methods
     results = reconstruct_and_evaluate(y, P, ncsn_model, hr_dct)
