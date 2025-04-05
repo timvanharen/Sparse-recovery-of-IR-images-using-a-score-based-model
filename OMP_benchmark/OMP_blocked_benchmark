@@ -1,0 +1,83 @@
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from sklearn.linear_model import orthogonal_mp
+from scipy.fftpack import dct, idct
+
+def dct2d_dict(block_size):
+    """Build DCT dictionary for given block size"""
+    P = block_size
+    n = P * P
+    D = []
+    for i in range(P):
+        for j in range(P):
+            basis = np.zeros((P, P))
+            basis[i, j] = 1.0
+            dct_basis = dct(dct(basis.T, norm='ortho').T, norm='ortho')
+            D.append(dct_basis.flatten())
+    D = np.stack(D, axis=1)
+    return D  # shape: (n, n)
+
+def compressed_sensing_block_reconstruct(y, Phi, D, k):
+    A = Phi @ D  # measurement matrix
+    x_hat = orthogonal_mp(A, y, n_nonzero_coefs=k)  # sparse code
+    recon_block = D @ x_hat
+    return recon_block
+
+def block_process_cs(img, block_size, m, k, seed=42):
+    np.random.seed(seed)
+    h, w = img.shape
+    n = block_size * block_size
+    D = dct2d_dict(block_size)
+    recon = np.zeros_like(img, dtype=np.float32)
+
+    for i in range(0, h, block_size):
+        for j in range(0, w, block_size):
+            block = img[i:i+block_size, j:j+block_size]
+            if block.shape != (block_size, block_size):
+                continue
+
+            x = block.flatten().astype(np.float32)
+
+            # Generate measurement matrix Φ: shape (m, n)
+            Phi = np.random.randn(m, n)
+            Phi /= np.linalg.norm(Phi, axis=1, keepdims=True)  # normalize rows
+
+            # Simulate compressed measurement y = Φx
+            x_dct = D.T @ x  # sparse representation
+            y = Phi @ D @ x_dct
+
+            # Reconstruct
+            recon_block = compressed_sensing_block_reconstruct(y, Phi, D, k)
+            recon_block = recon_block.reshape((block_size, block_size))
+
+            recon[i:i+block_size, j:j+block_size] = recon_block
+
+    return np.clip(recon, 0, 255).astype(np.uint8)
+
+def show_images(imgs, titles):
+    plt.figure(figsize=(14, 5))
+    for i, (img, title) in enumerate(zip(imgs, titles)):
+        plt.subplot(1, len(imgs), i+1)
+        plt.imshow(img, cmap='gray')
+        plt.title(title)
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+
+# --- Main ---
+
+# Load original image
+original = cv2.imread('images/high_res_train/HR_train/high_res_train_0.jpg', cv2.IMREAD_GRAYSCALE)
+if original is None:
+    raise FileNotFoundError("Please place 'original.png' in the current directory.")
+
+block_size = 32
+n = block_size * block_size
+m = int(0.25 * n)  # 25% measurements
+k = 600            # sparsity level
+
+reconstructed = block_process_cs(original, block_size, m, k)
+
+# Show result
+show_images([original, reconstructed], ["Original", "Compressed Sensing Reconstruction"])
