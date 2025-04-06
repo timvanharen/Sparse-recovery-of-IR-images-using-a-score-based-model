@@ -15,10 +15,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
 # Global configuration variables
-task = 'train' # 'test  # Task name
+task = 'verify' #'train' # 'test  # Task name
 batch_size = 32
 num_epochs = 100
-learning_rate = 1e-3
+learning_rate = 1e-4
 num_scales = num_epochs
 sigma_min = 0.01
 sigma_max = 1.0
@@ -39,16 +39,64 @@ for k, v in config.items():
 # - How does the reconstruction work? Is it possible to compare with annealed Langevin dynamics existing code?
 # - How to add the SNR to the measurements? (e.g. using a Gaussian noise model)
 # - How can we show pictures of the creation process? (e.g. using matplotlib or OpenCV)
-# - What happens if we use a lower resolution image? To train a bit faster?
+# - (Done) What happens if we use a lower resolution image? To train a bit faster?
+
+# - FInd out which NN architerture must be used for the NCSN model (e.g. UNet, ResNet, etc.)
+
+# - Find out why:
+#    - gradients are only in one axis direction, the should be vectors in all kinds of directions right?
+#    - the output image shows a cross in the middle of the image
+
+
+# TODO: Sturcture the code base and remove unused code and files
+# -  why use glob?
 # - Save analytic images in a dedicated folder (e.g. 'images/analytic_images')
 # - Save the model in a dedicated folder (e.g. 'models/ncsn_model.pth')
 # - Save checkpoints during training and save in a dedicated folder (e.g. 'checkpoints/')
-# - FInd out which architerture must be used for the NCSN model (e.g. UNet, ResNet, etc.)
+# - Fix the names of the h and y bitches and lr_dct etc.
 # - Structure the code base and remove unused code and files
-# - Find out why:
-#    - gradients are only in one axis direction
-#    - the output image shows a cross in the middle of the image
-# - Fix the names of the h and y bitches
+
+# ======================
+# test network with a known distribution
+# ======================
+def generate_known_distribution_samples_in_directory(num_samples=1000, save_dir='images/known_distribution'):
+    """Generate samples from a known distribution (e.g., Gaussian) and save them to a directory"""
+    low_res_dir = os.path.join(save_dir, 'lr')
+    os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(save_dir, exist_ok=True)
+    for i in range(num_samples):
+        sample = torch.randn(1, 28, 28)  # Example: Gaussian distribution
+        sample = (sample - sample.min()) / (sample.max() - sample.min())  # Normalize to [0, 1]
+        sample = (sample * 255).byte().numpy()
+        img = Image.fromarray(sample[0], mode='L')
+        img.save(os.path.join(save_dir, '/low_res_train/sample_{i}.png'))
+
+    for i in range(num_samples):
+        sample = torch.randn(1, 56, 56)  # Example: Gaussian distribution
+        sample = (sample - sample.min()) / (sample.max() - sample.min())  # Normalize to [0, 1]
+        sample = (sample * 255).byte().numpy()
+        img = Image.fromarray(sample[0], mode='L')
+        img.save(os.path.join(save_dir, f'/high_res_train/sample_{i}.png'))
+    print(f"Generated {num_samples*2} samples in {save_dir}")
+
+def test_network_with_known_distribution(model, num_samples=1000):
+    """Test the network with a known distribution (e.g., Gaussian)"""
+    # Generate samples from a known distribution
+    x = torch.randn(num_samples, 1, 28, 28).to(device)  # Example: Gaussian distribution
+    sigma = torch.ones(num_samples).to(device) * 0.5  # Example: Fixed noise level
+
+    # Forward pass through the model
+    with torch.no_grad():
+        output = model(x, sigma)
+
+    # Calculate metrics (e.g., MSE, PSNR)
+    mse = F.mse_loss(output, x)
+    psnr = 20 * torch.log10(1.0 / torch.sqrt(mse))
+
+    print(f"MSE: {mse.item()}, PSNR: {psnr.item()}")
+    return mse.item(), psnr.item()
+
+
 
 # =====================
 # Dataset Class
@@ -343,10 +391,9 @@ def annealed_langevin_dynamics(y, P, model, img_shape, num_epochs, num_scales, s
             # Prior term
             with torch.no_grad():
                 score = model(current_h, sigma * torch.ones(1, device=device))
-            print("score.shape:", score.shape)
-            show_resized_dct_image(score[0, 0].detach().cpu().numpy(), f"score Step {step}", wait=True)
+            # print("score.shape:", score.shape)
+            # show_resized_dct_image(score[0, 0].detach().cpu().numpy(), f"score Step {step}", wait=True)
             
-
             # Langevin update
             noise_term = torch.sqrt(2 * step_size) * torch.randn_like(current_h)
             show_resized_dct_image(noise_term[0, 0].detach().cpu().numpy(), f"noise_term Step {step}", wait=True)
@@ -458,6 +505,27 @@ def show_resized_dct_image(img_dct, title, wait=False):
 # Main Workflow
 # =====================
 if __name__ == "__main__":
+
+    if task == 'verify':
+        # Generate samples from a known distribution
+        generate_known_distribution_samples_in_directory(num_samples=1000, save_dir='images/known_distribution')
+        exit()
+        # Load data
+        dataset = ImageDataset(
+            high_res_dir='images/known_distribution\hr',
+            low_res_dir='images/known_distribution\lr',
+        )
+        ncsn_model = train_ncsn(dataset, batch_size=16, lr=learning_rate, num_epochs=1, 
+                                num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
+        # Save the model
+        torch.save(ncsn_model.state_dict(), 'ncsn_model.pth')
+        # Train the NCSN model on the known distribution
+        NCSN = NCSN(28, 28).to(device)  # Example: 28x28 images
+
+        # Test the network with a known distribution
+        test_network_with_known_distribution(NCSN, num_samples=1000)
+        exit(0)
+
     # Load data
     dataset = ImageDataset(
         low_res_dir='images/low_res_train/LR_train',
