@@ -11,6 +11,7 @@ from PIL import Image
 import glob
 import time
 import functools
+from pathlib import Path
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
@@ -36,16 +37,16 @@ print("Configuration:")
 for k, v in config.items():
     print(f"{k}: {v}")
 
-HR_train_data_output_dir = ".\images\high_res_train"
-HR_test_data_output_dir = ".\images\high_res_test"
-frikandel_train_data_output_dir = ".\images\\frikandel_train"
-frikandel_test_data_output_dir = ".\images\\frikandel_test"
-half_train_data_output_dir = ".\images\half_res_train"
-half_test_data_output_dir = ".\images\half_res_test"
-MR_train_data_output_dir = ".\images\medium_res_train"
-MR_test_data_output_dir = ".\images\medium_res_test"
-LR_train_data_output_dir = ".\images\low_res_train"
-LR_test_data_output_dir = ".\images\low_res_test"
+HR_train_data_output_dir = Path("./images/high_res_train")
+HR_test_data_output_dir = Path("./images/high_res_test")
+frikandel_train_data_output_dir = Path("./images/frikandel_train")
+frikandel_test_data_output_dir = Path("./images/frikandel_test")
+half_train_data_output_dir = Path("./images/half_res_train")
+half_test_data_output_dir = Path("./images/half_res_test")
+MR_train_data_output_dir = Path("./images/medium_res_train")
+MR_test_data_output_dir = Path("./images/medium_res_test")
+LR_train_data_output_dir = Path("./images/low_res_train")
+LR_test_data_output_dir = Path("./images/low_res_test")
 
 # TODO:
 # - Where is the gradient of the log likelihood and how can we test that it works?
