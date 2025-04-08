@@ -72,10 +72,10 @@ original = cv2.imread('images/high_res_train/HR_train/high_res_train_0.jpg', cv2
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")
 
-block_size = 32
+block_size = 16
 n = block_size * block_size
 m = int(0.25 * n)  # 25% measurements
-k = 600            # sparsity level
+k = 200            # sparsity level
 
 reconstructed = block_process_cs(original, block_size, m, k)
 

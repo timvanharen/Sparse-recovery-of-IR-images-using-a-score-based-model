@@ -4,10 +4,14 @@ import os
 import glob
 import cv2
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from sklearn.linear_model import OrthogonalMatchingPursuit, OrthogonalMatchingPursuitCV
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import normalize
+
+from scipy.fftpack import dctn, idctn
+from scipy.sparse.linalg import LinearOperator
 
 class ImageDataset(Dataset):
     def __init__(self, low_res_dir, high_res_dir):
@@ -40,15 +44,57 @@ class ImageDataset(Dataset):
         # Convert to DCT domain
         lr_dct = cv2.dct(np.float32(lr_img))
         hr_dct = cv2.dct(np.float32(hr_img))
-
+        
         # Show the DCT images for debugging
         # cv2.imshow('High Res DCT', hr_dct)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
         # lr_dct = dctn(lr_img) # norm='ortho'
         # hr_dct = dctn(hr_img) # norm='ortho'
-        return torch.tensor(lr_img), torch.tensor(hr_img) # Train with dense representation / image
-        return torch.tensor(lr_dct), torch.tensor(hr_dct)
+        #return torch.tensor(lr_img), torch.tensor(hr_img) # Train with dense representation / image
+        return torch.tensor(lr_dct), torch.tensor(hr_dct), torch.tensor(lr_img), torch.tensor(hr_img)
+
+
+
+def A_operator(x):
+    """Applies A to vector x: Downsampling after inverse DCT"""
+    # Reshape to 2D DCT coefficients
+    x_2d = x.reshape(hr_shape)
+    
+    # Inverse 2D DCT (to get real-space image)
+    image = idctn(x_2d)
+    
+    # Downsample (using simple slicing - modify if needed)
+    downsampled = image[::4, ::4]  
+    
+    return downsampled.ravel()
+
+def A_transpose_operator(y):
+    """Applies A^T to vector y: DCT after upsampling"""
+    # Reshape to 2D low-res image
+    y_2d = y.reshape(lr_shape)
+    
+    # Upsample (with zero insertion)
+    upsampled = np.zeros(hr_shape)
+    upsampled[::4, ::4] = y_2d
+    
+    # Forward 2D DCT (to get coefficients)
+    coeffs = dctn(upsampled)
+    
+    return coeffs.ravel()
+
+
+def construct_A_explicit(m,n):
+    """Constructs explicit A matrix (memory intensive!)"""
+    A = np.zeros((m, n))
+    basis_vec = np.zeros(n)
+    
+    for i in range(n):
+        basis_vec[i] = 1
+        A[:, i] = A_operator(basis_vec)
+        basis_vec[i] = 0
+        
+    return A
 
 
 if __name__ == "__main__":
@@ -57,23 +103,63 @@ if __name__ == "__main__":
         low_res_dir='images/low_res_train/LR_train',
         high_res_dir='images/medium_res_train/MR_train'
     )
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+    n_components = dataset.img_hr_height * dataset.img_hr_width
+    print(f"Number of components: {n_components}") 
+    n_nonzero_coefs = dataset.img_lr_height * dataset.img_lr_width 
+    print(f"Number of non-zero coefficients: {n_nonzero_coefs}")
+
+
+    _,_, lr_image, hr_image = dataset[0]
+    # Test with given matrix
+    # Dimensions
+    hr_shape = hr_image.shape  # High resolution shape (x)
+    lr_shape = lr_image.shape   # Low resolution shape (y)
+    n = hr_shape[0] * hr_shape[1]  # 327,680 (x size)
+    m = lr_shape[0] * lr_shape[1]  # 1,280 (y size) 
+    factor = hr_shape[0] // lr_shape[0]  
+    print(f"Factor: {factor}")
+    # # Create LinearOperator for A (memory efficient)
+    # A = LinearOperator(shape=(m, n), matvec=A_operator, rmatvec=A_transpose_operator)
+    # print("A.shape:", A.shape)
+    # print("A:", A)
+
+    A_exp = construct_A_explicit(m,n)  # Uncomment to construct explicit A (not recommended for large images)
+    print("A_exp.shape:", A_exp.shape)
+    print("A_exp:", A_exp)
+
+
+    # y is the lr_dct and y_HR is the hr_dct
+    for batch_idx, (y, y_HR, y_img_lr, y_img_hr) in enumerate(dataloader):
+        if batch_idx == 0:
+            break
+    print(f"Low-res DCT image shape: {y.shape}")
+    print(f"High-res DCT image shape: {y_HR.shape}")
+
+
+    y = np.clip(y, -1, 1)
+    y_HR = np.clip(y_HR, -1, 1)
+    yFlat = y.flatten()
     
-    n_components, n_features = 512, 100
-    n_nonzero_coefs = 17    
-
+    y_HR_flat = y_HR.flatten().reshape(1, -1)
+    print(f"Low-res DCT image flattened shape: {yFlat.shape}")
+    print(f"High-res DCT image flattened shape: {y_HR_flat.shape}")
     # distort the clean signal
-    y_noisy = y + 0.05 * np.random.randn(len(y))
-
+    y_noisy = yFlat + 0.05 * np.random.randn(len(y))
+    X = y_HR_flat
     # plot the sparse signal
-    plt.figure(figsize=(7, 7))
-    plt.subplot(4, 1, 1)
-    plt.xlim(0, 512)
-    plt.title("Sparse signal")
-    plt.stem(idx, w[idx])
+    # plt.figure(figsize=(7, 7))
+    # plt.subplot(4, 1, 1)
+    # plt.xlim(0, n_nonzero_coefs)
+    # plt.title("Sparse signal")
+    # plt.stem(yFlat[0, :])
+    yFlat = yFlat.numpy()
 
-    # plot the noise-free reconstruction
-    omp = OrthogonalMatchingPursuit(n_nonzero_coefs=n_nonzero_coefs)
-    omp.fit(X, y)
+    print("yFlat shape:", yFlat.shape)
+
+    print(A_exp.shape)
+    omp = OrthogonalMatchingPursuit(tol= 1000, n_nonzero_coefs=n_nonzero_coefs)
+    omp.fit(A_exp, yFlat)
     coef = omp.coef_
     (idx_r,) = coef.nonzero()
     plt.subplot(4, 1, 2)
