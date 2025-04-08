@@ -11,17 +11,18 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 from scipy.sparse import diags
 
 SHOW_DOWNSAMPLE_IMAGES = True
 
 # Directory paths
-HR_train_data_output_dir = ".\images\high_res_train"
-HR_test_data_output_dir = ".\images\high_res_test"
-MR_train_data_output_dir = ".\images\medium_res_train"
-MR_test_data_output_dir = ".\images\medium_res_test"
-LR_train_data_output_dir = ".\images\low_res_train"
-LR_test_data_output_dir = ".\images\low_res_test"
+HR_train_data_output_dir = Path("./images/high_res_train")
+HR_test_data_output_dir = Path("./images/high_res_test")
+MR_train_data_output_dir = Path("./images/medium_res_train")
+MR_test_data_output_dir = Path("./images/medium_res_test")
+LR_train_data_output_dir = Path("./images/low_res_train")
+LR_test_data_output_dir = Path("./images/low_res_test")
 
 # File names for the training and testing data sets
 HR_train_file_name = "high_res_train_0.jpg"
