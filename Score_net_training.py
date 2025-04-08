@@ -301,7 +301,7 @@ from scipy.sparse.linalg import LinearOperator
 if not os.path.exists('/checkpoints'):
   os.makedirs('/checkpoints')
 
-n_epochs =   50#@param {'type':'integer'}
+n_epochs =   50 #@param {'type':'integer'}
 ## size of a mini-batch
 batch_size =  32 #@param {'type':'integer'}
 ## learning rate
@@ -343,7 +343,7 @@ USE_MNIST = False #@param {type:"boolean"}
 if USE_MNIST:
     dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
 else:
-    dataset = ImageDataset(high_res_dir='images/medium_res_train/MR_train', low_res_dir='images/low_res_train/LR_train',)
+    dataset = ImageDataset(high_res_dir='images/medium_res_train', low_res_dir='images/low_res_train',)
 
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)#, num_workers=2)
 lr_img, hr_img = dataset[0]
@@ -659,3 +659,4 @@ plt.figure(figsize=(6,6))
 plt.axis('off')
 plt.imshow(sample_grid.permute(1, 2, 0).cpu()) #, vmin=0., vmax=1.)
 plt.show()
+plt.savefig("batch generated")

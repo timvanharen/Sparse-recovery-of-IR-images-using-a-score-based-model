@@ -4,464 +4,181 @@ import numpy as np
 import cv2
 
 # max amount of images to process
-MAX_IMAGE = 2000
-TEST_RATIO = 0.2
+MAX_TRAIN_IMAGE = 10742 # Max is around 10700
+MAX_TEST_IMAGE = 1144
+CLEAN_TRAIN_DIRS_FIRST = False # Set to True to clean the directories before processing the images
+CLEAN_TEST_DIRS_FIRST = True
+
+# Resolution of the images
+# 1. High resolution (HR)
+# 2. Frikandel resolution (2 (\sqrt(2) x \sqrt(2)) times smaller than HR)
+# 3. Half resolution (HalfR) (4 (2x2) times smaller than HR)
+# 4. Medium resolution (MR) (16 (4x4) times smaller than HR)
+# 5. Low resolution (LR) (256 (16x16) times smaller than HR)
+frikandel_reduce_factor = np.sqrt(2)
+half_reduce_factor = 2
+medium_reduce_factor = 4
+low_reduce_factor = 16
+# Put these factors in a list to make it easier to iterate over them
+reduce_factors = [1, frikandel_reduce_factor, half_reduce_factor, medium_reduce_factor, low_reduce_factor]
 
 # Dir paths
 data_dir = "images\data\data"
-HR_train_data_output_dir = ".\images\high_res_train\HR_train\\"
-HR_test_data_output_dir = ".\images\high_res_test\HR_test\\"
-frikandel_train_data_output_dir = ".\images\\frikandel_train\\frikandel_train\\"
-frikandel_test_data_output_dir = ".\images\\frikandel_test\\frikandel_test\\"
-MR_train_data_output_dir = ".\images\medium_res_train\MR_train\\"
-MR_test_data_output_dir = ".\images\medium_res_test\MR_test\\"
-LR_train_data_output_dir = ".\images\low_res_train\LR_train\\"
-LR_test_data_output_dir = ".\images\low_res_test\LR_test\\"
+data_val_dir = "images\data\data_val"
+HR_train_data_output_dir = ".\images\high_res_train"
+HR_test_data_output_dir = ".\images\high_res_test"
+frikandel_train_data_output_dir = ".\images\\frikandel_train"
+frikandel_test_data_output_dir = ".\images\\frikandel_test"
+half_train_data_output_dir = ".\images\half_res_train"
+half_test_data_output_dir = ".\images\half_res_test"
+MR_train_data_output_dir = ".\images\medium_res_train"
+MR_test_data_output_dir = ".\images\medium_res_test"
+LR_train_data_output_dir = ".\images\low_res_train"
+LR_test_data_output_dir = ".\images\low_res_test"
 
-# Also make a directory for the discrete cosine transform of all the images
-DCT_HR_train_data_output_dir = ".\images\dct_high_res_train\DCT_HR_train\\"
-DCT_HR_test_data_output_dir = ".\images\dct_high_res_test\DCT_HR_test\\"
-DCT_frikandel_train_data_output_dir = ".\images\dct_frikandel_train\DCT_frikandel_train\\"
-DCT_frikandel_test_data_output_dir = ".\images\dct_frikandel_test\DCT_frikandel_test\\"
-DCT_MR_train_data_output_dir = ".\images\dct_medium_res_train\DCT_MR_train\\"
-DCT_MR_test_data_output_dir = ".\images\dct_medium_res_test\DCT_MR_test\\"
-DCT_LR_train_data_output_dir = ".\images\dct_low_res_train\DCT_LR_train\\"
-DCT_LR_test_data_output_dir = ".\images\dct_low_res_test\DCT_LR_test\\"
+# Put these paths in lists per train/test to make it easier to iterate over them
+output_train_dirs = [HR_train_data_output_dir, frikandel_train_data_output_dir, half_train_data_output_dir, MR_train_data_output_dir, LR_train_data_output_dir]
+output_test_dirs = [HR_test_data_output_dir, frikandel_test_data_output_dir, half_test_data_output_dir, MR_test_data_output_dir, LR_test_data_output_dir]
 
-# Split the data set into training and testing sets
-def process_data_set(data_dir, test_ratio=0.2):
-    """
-    Process the data set to create the training and testing data sets.
-    
-    Args:
-    - data_dir: Directory containing the data set.
-    - test_ratio: Ratio of the data set to use for testing.
-    
-    Returns:
-    - train_data: Training data set.
-    - test_data: Testing data set.
-    
-    """
-    
-    # Get the list of files in the data directory
-    file_list = os.listdir(data_dir)
-    
-    # Shuffle the list of files
-    np.random.shuffle(file_list)
-    
-    # Calculate the number of test samples
-    num_test_samples = int(len(file_list) * test_ratio)
-    
-    # Split the data set into training and testing sets
-    test_data = file_list[:num_test_samples]
-    train_data = file_list[num_test_samples:]
-    
-    return train_data, test_data
+# File names for the training and testing data sets
+HR_train_file_name = "high_res_train"
+HR_test_file_name = "high_res_test"
+frikandel_train_file_name = "frikandel_train"
+frikandel_test_file_name = "frikandel_test"
+half_train_file_name = "half_res_train"
+half_test_file_name = "half_res_test"
+MR_train_file_name = "medium_res_train"
+MR_test_file_name = "medium_res_test"
+LR_train_file_name = "low_res_train"
+LR_test_file_name = "low_res_test"
+
+# Put these file names in lists per train/test to make it easier to iterate over them
+output_train_file_names = [HR_train_file_name, frikandel_train_file_name, half_train_file_name, MR_train_file_name, LR_train_file_name]
+output_test_file_names = [HR_test_file_name, frikandel_test_file_name, half_test_file_name, MR_test_file_name, LR_test_file_name]
+
+# Check if data and data_val directories exist
+if not os.path.exists(data_dir):
+    print("Data directory does not exist.")
+    exit()
+if not os.path.exists(data_val_dir):
+    print("Data validation directory does not exist.")
+    exit()
+
+# Iterate over the directories and check if they exist otherwise create them
+for dir in output_train_dirs:
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+
+for dir in output_test_dirs:
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+
+# List the files in the data directory
+train_file_list = os.listdir(data_dir)
+test_file_list = os.listdir(data_val_dir)
+train_image_count = len(train_file_list)
+test_image_count = len(test_file_list)
+print("Number of training samples available: ", train_image_count)
+print("Number of testing samples available: ", test_image_count)
+
+# show the resolution of 1 image
+image = cv2.imread(os.path.join(data_dir, train_file_list[0]))
+height, width = image.shape[:2]
+print("Resolution of the images: ", height, "x", width)
+input("Press Enter to continue...")
+
+# Clear the directories before processing the images
+if CLEAN_TRAIN_DIRS_FIRST == True:
+    for dir in output_train_dirs:
+        for file in os.listdir(dir):
+            os.remove(os.path.join(dir, file))
+    print("Train directories cleaned.")
+if CLEAN_TEST_DIRS_FIRST == True:
+    for dir in output_test_dirs:
+        for file in os.listdir(dir):
+            os.remove(os.path.join(dir, file))
+    print("Test directories cleaned.")
+
+# Save a list of the number of files in all the directories
+train_data_dir_num = []
+test_data_dir_num = []
+
+# For training images
+for dir in output_train_dirs:
+    train_data_dir_num.append(len(os.listdir(dir)))
+    print("Number of images stored in: ", dir, "is: ", train_data_dir_num[-1])
+
+# For testing images
+for dir in output_test_dirs:
+    test_data_dir_num.append(len(os.listdir(dir)))
+    print("Number of images stored in: ", dir, "is: ", test_data_dir_num[-1])
 
 # This function downsamples the image to a smaller size of columns and rows specified by the user
 def downsample_image(image, rows, cols):
-    """
-    Downsample the image to a smaller size.
-    
-    Args:
-    - image: Input image as a NumPy array.
-    - rows: Number of rows in the downsampled image.
-    - cols: Number of columns in the downsampled image.
-    
-    Returns:
-    - downsampled_image: Downsampled image.
-    
-    """
-    
     # Resize the image to the specified number of rows and columns
     downsampled_image = cv2.resize(image, (rows, cols))
-    
     return downsampled_image
 
-
-# Test the splitting of the data set
-train_data, test_data = process_data_set(data_dir, TEST_RATIO)
-print("Number of training samples available: ", len(train_data))
-print("Number of testing samples available: ", len(test_data))
-
-# Check if "images/data" directory exists
-if not os.path.exists(data_dir):
-    print("images/data directory does not exist, so the data set is probably missing.")
-    exit()
+# Check if both processes need to be done by summing the number of images in the directories and multiplying by the max amount of images to process
+if (sum(train_data_dir_num)) >= (MAX_TRAIN_IMAGE * len(output_train_dirs)):
+    print("Train directory is full. No need to process the images.")
 else:
-    print("Data directory exists.")
+    # Process the traing data set
+    for file_count, file in enumerate(os.listdir(data_dir)): # check every file in the input dir
+        if file.endswith(".jpg") and file_count < MAX_TRAIN_IMAGE:
+            # Read the image file in grayscale
+            image = cv2.imread(os.path.join(data_dir, file), cv2.IMREAD_GRAYSCALE)
+            for i, dir in enumerate(output_train_dirs): # check every dir individually
+                if test_data_dir_num[i] < MAX_TRAIN_IMAGE: # check if we need to fill a dir at all
+                    # Change the name to a numbered name
+                    new_file = output_train_file_names[i] + "_" + str(file_count) + ".jpg"
 
-# Check if the directories are already created
-if not os.path.exists(HR_train_data_output_dir):
-    os.makedirs(HR_train_data_output_dir)
-if not os.path.exists(HR_test_data_output_dir):
-    os.makedirs(HR_test_data_output_dir)
+                    if i == 0: #We want to store the original image in the HR directory
+                        cv2.imwrite(os.path.join(dir, new_file), image)
+                    else: # Resize the image to the specified number of rows and columns
+                        # Downsample the image
+                        rows = int(image.shape[1] // reduce_factors[i])
+                        cols = int(image.shape[0] // reduce_factors[i])
+                        downsampled_image = downsample_image(image, rows, cols)
+                        # Write the image to the dir
+                        cv2.imwrite(os.path.join(dir, new_file), downsampled_image)
+                
 
-if not os.path.exists(frikandel_train_data_output_dir):
-    os.makedirs(frikandel_train_data_output_dir)
-if not os.path.exists(frikandel_test_data_output_dir):
-    os.makedirs(frikandel_test_data_output_dir)
+            # Print the progress every 100 images by printing the index of the image
+            if file_count % (train_image_count//10) == 0:
+                print("progress: ", file_count, "/", train_image_count, " For all resolutions")
 
-if not os.path.exists(MR_train_data_output_dir):
-    os.makedirs(MR_train_data_output_dir)
-if not os.path.exists(MR_test_data_output_dir):
-    os.makedirs(MR_test_data_output_dir)
-
-if not os.path.exists(LR_train_data_output_dir):
-    os.makedirs(LR_train_data_output_dir)
-if not os.path.exists(LR_test_data_output_dir):
-    os.makedirs(LR_test_data_output_dir)
-
-# Check how much files are already in the directories
-print("Number of files in HR_train_data_output_dir: ", len(os.listdir(HR_train_data_output_dir)))
-print("Number of files in HR_test_data_output_dir: ", len(os.listdir(HR_test_data_output_dir)))
-print("Number of files in frikandel_train_data_output_dir: ", len(os.listdir(frikandel_train_data_output_dir)))
-print("Number of files in frikandel_test_data_output_dir: ", len(os.listdir(frikandel_test_data_output_dir)))
-print("Number of files in MR_train_data_output_dir: ", len(os.listdir(MR_train_data_output_dir)))
-print("Number of files in MR_test_data_output_dir: ", len(os.listdir(MR_test_data_output_dir)))
-print("Number of files in LR_train_data_output_dir: ", len(os.listdir(LR_train_data_output_dir)))
-print("Number of files in LR_test_data_output_dir: ", len(os.listdir(LR_test_data_output_dir)))
-input("Press Enter to continue...")
-
-image_count = len(os.listdir(HR_train_data_output_dir))
-print("Images stored in high_res_train: ", image_count)
-# Write the training and testing data sets to the corresponding directories
-for file in train_data:
-    if image_count < MAX_IMAGE:
+# Process the testing data set
+for file_count, file in enumerate(os.listdir(data_val_dir)): # check every file in the input dir
+    if file.endswith(".jpg") and file_count < MAX_TEST_IMAGE:
         # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Change the name to a numbered name
-        new_file = "high_res_train_" + str(train_data.index(file)) + ".jpg"
-            
-        # Write the image to the HR_train_data_output_dir directory
-        cv2.imwrite(os.path.join(HR_train_data_output_dir, new_file), image)
+        image = cv2.imread(os.path.join(data_val_dir, file), cv2.IMREAD_GRAYSCALE)
+        for i, dir in enumerate(output_test_dirs): # check every dir individually
+            if test_data_dir_num[i] < MAX_TEST_IMAGE : # check if we need to fill a dir at all
+                # Change the name to a numbered name
+                new_file = output_test_file_names[i] + "_" + str(file_count) + ".jpg"
+
+                if i == 0: #We want to store the original image in the HR directory
+                    cv2.imwrite(os.path.join(dir, new_file), image)
+                else: # Resize the image to the specified number of rows and columns
+                    # Downsample the image
+                    rows = int(image.shape[1] // reduce_factors[i])
+                    cols = int(image.shape[0] // reduce_factors[i])
+                    downsampled_image = downsample_image(image, rows, cols)
+                    # Write the image to the dir
+                    cv2.imwrite(os.path.join(dir, new_file), downsampled_image)
 
         # Print the progress every 100 images by printing the index of the image
-        if train_data.index(file) % 100 == 0:
-            print("progress: ", train_data.index(file))
-        
-        image_count += 1
+        if file_count % (test_image_count//10) == 0:
+            print("progress: ", file_count, "/", test_image_count, " For all resolutions")
 
-image_count = len(os.listdir(HR_test_data_output_dir))
-print("Images stored in high_res_test: ", image_count)
-for file in test_data:
-    if image_count < MAX_IMAGE*TEST_RATIO:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Change the name to a numbered name
-        new_file = "high_res_test_" + str(test_data.index(file)) + ".jpg"
+print("Finished processing training data set.")
+# For training images
+for dir in output_train_dirs:
+    train_data_dir_num.append(len(os.listdir(dir)))
+    print("Number of images stored in: ", dir, "is: ", train_data_dir_num[-1])
 
-        # Write the image to the HR_test_data_output_dir directory
-        cv2.imwrite(os.path.join(HR_test_data_output_dir, new_file), image)
-
-        # Print the progress every 100 images
-        if test_data.index(file) % 100 == 0:
-            print("progress: ", test_data.index(file))
-
-        image_count += 1
-
-# ====
-# Frikandel res
-# ====
-
-image = cv2.imread(os.path.join(data_dir, train_data[0]))
-
-print("Size of image: ", image.shape)
-factor = np.sqrt(2)
-rows = (image.shape[1]//factor).astype(int)
-cols = (image.shape[0]//factor).astype(int)
-print("rows: ", rows)
-print("cols: ", cols)
-
-image_count = len(os.listdir(frikandel_train_data_output_dir))
-print("Images stored in frikandel_res_train: ", image_count)
-for file in train_data:
-    if image_count < MAX_IMAGE:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Downsample the image
-        downsampled_image = downsample_image(image, rows, cols)
-
-        # Change the name to a numbered name
-        new_file = "frikandel_res_train_" + str(train_data.index(file)) + ".jpg"
-        
-        # Write the downsampled image to the frikandel resolution training directory
-        cv2.imwrite(os.path.join(frikandel_train_data_output_dir, new_file), downsampled_image)
-
-        # Print the progress every 100 images
-        if train_data.index(file) % 100 == 0 and train_data.index(file) < MAX_IMAGE:
-            print("progress: ", train_data.index(file))
-        
-        image_count += 1
-
-image_count = len(os.listdir(frikandel_test_data_output_dir))
-print("Images stored in frikandel_res_test: ", image_count)
-for file in test_data:
-    if image_count < MAX_IMAGE*TEST_RATIO:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Downsample the image
-        downsampled_image = downsample_image(image, rows, cols)
-
-        # Change the name to a numbered name
-        new_file = "frikandel_res_test_" + str(test_data.index(file)) + ".jpg"
-        
-        # Write the downsampled image to the frikandel resolution testing directory
-        cv2.imwrite(os.path.join(frikandel_test_data_output_dir, new_file), downsampled_image)
-
-        # Print the progress every 100 images
-        if test_data.index(file) % 100 == 0 and test_data.index(file) < MAX_IMAGE:
-            print("progress: ", test_data.index(file))
-
-        image_count += 1
-
-# ====
-# medium res
-# ====
-
-# Do it for a frikandel resolution image as well
-# First load one image to get the size of the downsampled image
-image = cv2.imread(os.path.join(data_dir, train_data[0]))
-
-# Show the different channels of the image separately
-b, g, r = cv2.split(image)
-cv2.imshow('Blue Channel', b)
-cv2.imshow('Green Channel', g)
-cv2.imshow('Red Channel', r)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
-
-print("Size of image: ", image.shape)
-factor = 4
-rows = image.shape[1]//factor
-cols = image.shape[0]//factor
-print("rows: ", rows)
-print("cols: ", cols)
-
-image_count = len(os.listdir(MR_train_data_output_dir))
-print("Images stored in medium_res_train: ", image_count)
-for file in train_data:
-    if image_count < MAX_IMAGE:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Downsample the image
-        downsampled_image = downsample_image(image, rows, cols)
-
-        # Change the name to a numbered name
-        new_file = "medium_res_train_" + str(train_data.index(file)) + ".jpg"
-        
-        # Write the downsampled image to the medium resolution training directory
-        cv2.imwrite(os.path.join(MR_train_data_output_dir, new_file), downsampled_image)
-
-        # Print the progress every 100 images
-        if train_data.index(file) % 100 == 0 and train_data.index(file) < MAX_IMAGE:
-            print("progress: ", train_data.index(file))
-        
-        image_count += 1
-
-image_count = len(os.listdir(MR_test_data_output_dir))
-print("Images stored in medium_res_test: ", image_count)
-for file in test_data:
-    if image_count < MAX_IMAGE*TEST_RATIO:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Downsample the image
-        downsampled_image = downsample_image(image, rows, cols)
-
-        # Change the name to a numbered name
-        new_file = "medium_res_test_" + str(test_data.index(file)) + ".jpg"
-        
-        # Write the downsampled image to the medium resolution testing directory
-        cv2.imwrite(os.path.join(MR_test_data_output_dir, new_file), downsampled_image)
-
-        # Print the progress every 100 images
-        if test_data.index(file) % 100 == 0 and test_data.index(file) < MAX_IMAGE:
-            print("progress: ", test_data.index(file))
-
-        image_count += 1
-
-# And then also write the downsampled images to the corresponding directories called "low_res_train" and "low_res_test"
-
-# First load one image to get the size of the downsampled image
-image = cv2.imread(os.path.join(data_dir, train_data[0]))
-
-# Show the different channels of the image separately
-b, g, r = cv2.split(image)
-cv2.imshow('Blue Channel', b)
-cv2.imshow('Green Channel', g)
-cv2.imshow('Red Channel', r)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
-
-print("Size of image: ", image.shape)
-factor = 16
-rows = image.shape[1]//factor
-cols = image.shape[0]//factor
-print("rows: ", rows)
-print("cols: ", cols)
-
-image_count = len(os.listdir(LR_train_data_output_dir))
-print("Images stored in low_res_train: ", image_count)
-for file in train_data:
-    if image_count < MAX_IMAGE:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Downsample the image
-        downsampled_image = downsample_image(image, rows, cols)
-
-        # Change the name to a numbered name
-        new_file = "low_res_train_" + str(train_data.index(file)) + ".jpg"
-        
-        # Write the downsampled image to the low resolution training directory
-        cv2.imwrite(os.path.join(LR_train_data_output_dir, new_file), downsampled_image)
-
-        # Print the progress every 100 images
-        if train_data.index(file) % 100 == 0 and train_data.index(file) < MAX_IMAGE:
-            print("progress: ", train_data.index(file))
-        
-        image_count += 1
-
-image_count = len(os.listdir(LR_test_data_output_dir))
-print("Images stored in low_res_test: ", image_count)
-for file in test_data:
-    if image_count < MAX_IMAGE*TEST_RATIO:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Downsample the image
-        downsampled_image = downsample_image(image, rows, cols)
-
-        # Change the name to a numbered name
-        new_file = "low_res_test_" + str(test_data.index(file)) + ".jpg"
-        
-        # Write the downsampled image to the low resolution testing directory
-        cv2.imwrite(os.path.join(LR_test_data_output_dir, new_file), downsampled_image)
-
-        # Print the progress every 100 images
-        if test_data.index(file) % 100 == 0 and test_data.index(file) < MAX_IMAGE:
-            print("progress: ", test_data.index(file))
-
-        image_count += 1
-
-
-# Now enter the second stage of the script, which is to perform the discrete cosine transform on the images and store them in the corresponding directories
-# Check if the directories are already created
-if not os.path.exists(DCT_HR_train_data_output_dir):
-    os.makedirs(DCT_HR_train_data_output_dir)
-if not os.path.exists(DCT_HR_test_data_output_dir):
-    os.makedirs(DCT_HR_test_data_output_dir)
-if not os.path.exists(DCT_LR_train_data_output_dir):
-    os.makedirs(DCT_LR_train_data_output_dir)
-if not os.path.exists(DCT_LR_test_data_output_dir):
-    os.makedirs(DCT_LR_test_data_output_dir)
-
-# Check how much files are already in the directories
-print("Number of files in DCT_HR_train_data_output_dir: ", len(os.listdir(DCT_HR_train_data_output_dir)))
-print("Number of files in DCT_HR_test_data_output_dir: ", len(os.listdir(DCT_HR_test_data_output_dir)))
-print("Number of files in DCT_LR_train_data_output_dir: ", len(os.listdir(DCT_LR_train_data_output_dir)))
-print("Number of files in DCT_LR_test_data_output_dir: ", len(os.listdir(DCT_LR_test_data_output_dir)))
-input("Press Enter to continue...")
-
-image_count = len(os.listdir(DCT_HR_train_data_output_dir))
-print("Images stored in DCT_HR_train: ", image_count)
-# Write the training and testing data sets to the corresponding directories
-for file in train_data:
-    if image_count < MAX_IMAGE:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Change the name to a numbered name
-        new_file = "dct_train_" + str(train_data.index(file)) + ".jpg"
-        
-        # Perform the discrete cosine transform on the image
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        dct_image = cv2.dct(np.float32(gray_image), cv2.DCT_INVERSE)
-
-        # Write the image to the DCT_HR_train_data_output_dir directory
-        cv2.imwrite(os.path.join(DCT_HR_train_data_output_dir, new_file), dct_image)
-
-        # Print the progress every 100 images by printing the index of the image
-        if train_data.index(file) % 100 == 0:
-            print("progress: ", train_data.index(file))
-        
-        image_count += 1
-
-image_count = len(os.listdir(DCT_HR_test_data_output_dir))
-print("Images stored in DCT_HR_test: ", image_count)
-
-for file in test_data:
-    if image_count < MAX_IMAGE*TEST_RATIO:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Change the name to a numbered name
-        new_file = "dct_test_" + str(test_data.index(file)) + ".jpg"
-        
-        # Perform the discrete cosine transform on the image
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        dct_image = cv2.dct(np.float32(gray_image), cv2.DCT_INVERSE)
-
-        # Write the image to the DCT_HR_test_data_output_dir directory
-        cv2.imwrite(os.path.join(DCT_HR_test_data_output_dir, new_file), dct_image)
-
-        # Print the progress every 100 images
-        if test_data.index(file) % 100 == 0:
-            print("progress: ", test_data.index(file))
-
-        image_count += 1
-
-# Now dct the low resolution images
-image_count = len(os.listdir(DCT_LR_train_data_output_dir))
-print("Images stored in DCT_LR_train: ", image_count)
-
-for file in train_data:
-    if image_count < MAX_IMAGE:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Change the name to a numbered name
-        new_file = "dct_low_res_train_" + str(train_data.index(file)) + ".jpg"
-        
-        # Perform the discrete cosine transform on the image
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        dct_image = cv2.dct(np.float32(gray_image), cv2.DCT_INVERSE)
-
-        # Write the image to the DCT_LR_train_data_output_dir directory
-        cv2.imwrite(os.path.join(DCT_LR_train_data_output_dir, new_file), dct_image)
-
-        # Print the progress every 100 images by printing the index of the image
-        if train_data.index(file) % 100 == 0:
-            print("progress: ", train_data.index(file))
-        
-        image_count += 1
-
-image_count = len(os.listdir(DCT_LR_test_data_output_dir))
-print("Images stored in DCT_LR_test: ", image_count)
-
-for file in test_data:
-    if image_count < MAX_IMAGE*TEST_RATIO:
-        # Read the image file
-        image = cv2.imread(os.path.join(data_dir, file))
-        
-        # Change the name to a numbered name
-        new_file = "dct_low_res_test_" + str(test_data.index(file)) + ".jpg"
-        
-        # Perform the discrete cosine transform on the image
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        dct_image = cv2.dct(np.float32(gray_image), cv2.DCT_INVERSE)
-
-        # Write the image to the DCT_LR_test_data_output_dir directory
-        cv2.imwrite(os.path.join(DCT_LR_test_data_output_dir, new_file), dct_image)
-
-        # Print the progress every 100 images
-        if test_data.index(file) % 100 == 0:
-            print("progress: ", test_data.index(file))
-
-        image_count += 1
+# For testing images
+for dir in output_test_dirs:
+    test_data_dir_num.append(len(os.listdir(dir)))
+    print("Number of images stored in: ", dir, "is: ", test_data_dir_num[-1])

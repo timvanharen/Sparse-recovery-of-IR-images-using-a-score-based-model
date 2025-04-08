@@ -68,7 +68,7 @@ def show_images(imgs, titles):
 # --- Main ---
 
 # Load original image
-original = cv2.imread('images/high_res_train/HR_train/high_res_train_0.jpg', cv2.IMREAD_GRAYSCALE)
+original = cv2.imread('images/high_res_train/high_res_train_0.jpg', cv2.IMREAD_GRAYSCALE)
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")
 

@@ -10,14 +10,17 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import glob
 import time
+import functools
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
+USE_NCSN_MODEL = False  # Set to False to use ScoreNet instead
+
 # Global configuration variables
-task = 'verify' #'train' # 'test  # Task name
+task = 'generate' #'train' # 'test  # Task name
 batch_size = 32
-num_epochs = 100
+num_epochs = 5
 learning_rate = 1e-4
 num_scales = num_epochs
 sigma_min = 0.01
@@ -33,6 +36,17 @@ print("Configuration:")
 for k, v in config.items():
     print(f"{k}: {v}")
 
+HR_train_data_output_dir = ".\images\high_res_train"
+HR_test_data_output_dir = ".\images\high_res_test"
+frikandel_train_data_output_dir = ".\images\\frikandel_train"
+frikandel_test_data_output_dir = ".\images\\frikandel_test"
+half_train_data_output_dir = ".\images\half_res_train"
+half_test_data_output_dir = ".\images\half_res_test"
+MR_train_data_output_dir = ".\images\medium_res_train"
+MR_test_data_output_dir = ".\images\medium_res_test"
+LR_train_data_output_dir = ".\images\low_res_train"
+LR_test_data_output_dir = ".\images\low_res_test"
+
 # TODO:
 # - Where is the gradient of the log likelihood and how can we test that it works?
 # - How to add noise to the measurements?
@@ -41,7 +55,7 @@ for k, v in config.items():
 # - How can we show pictures of the creation process? (e.g. using matplotlib or OpenCV)
 # - (Done) What happens if we use a lower resolution image? To train a bit faster?
 
-# - FInd out which NN architerture must be used for the NCSN model (e.g. UNet, ResNet, etc.)
+# - (Done) FInd out which NN architerture must be used for the NCSN model (e.g. UNet, ResNet, etc.)
 
 # - Find out why:
 #    - gradients are only in one axis direction, the should be vectors in all kinds of directions right?
@@ -49,54 +63,12 @@ for k, v in config.items():
 
 
 # TODO: Sturcture the code base and remove unused code and files
-# -  why use glob?
+# - why use glob?
 # - Save analytic images in a dedicated folder (e.g. 'images/analytic_images')
 # - Save the model in a dedicated folder (e.g. 'models/ncsn_model.pth')
 # - Save checkpoints during training and save in a dedicated folder (e.g. 'checkpoints/')
 # - Fix the names of the h and y bitches and lr_dct etc.
 # - Structure the code base and remove unused code and files
-
-# ======================
-# test network with a known distribution
-# ======================
-def generate_known_distribution_samples_in_directory(num_samples=1000, save_dir='images/known_distribution'):
-    """Generate samples from a known distribution (e.g., Gaussian) and save them to a directory"""
-    low_res_dir = os.path.join(save_dir, 'lr')
-    os.makedirs(save_dir, exist_ok=True)
-    os.makedirs(save_dir, exist_ok=True)
-    for i in range(num_samples):
-        sample = torch.randn(1, 28, 28)  # Example: Gaussian distribution
-        sample = (sample - sample.min()) / (sample.max() - sample.min())  # Normalize to [0, 1]
-        sample = (sample * 255).byte().numpy()
-        img = Image.fromarray(sample[0], mode='L')
-        img.save(os.path.join(save_dir, '/low_res_train/sample_{i}.png'))
-
-    for i in range(num_samples):
-        sample = torch.randn(1, 56, 56)  # Example: Gaussian distribution
-        sample = (sample - sample.min()) / (sample.max() - sample.min())  # Normalize to [0, 1]
-        sample = (sample * 255).byte().numpy()
-        img = Image.fromarray(sample[0], mode='L')
-        img.save(os.path.join(save_dir, f'/high_res_train/sample_{i}.png'))
-    print(f"Generated {num_samples*2} samples in {save_dir}")
-
-def test_network_with_known_distribution(model, num_samples=1000):
-    """Test the network with a known distribution (e.g., Gaussian)"""
-    # Generate samples from a known distribution
-    x = torch.randn(num_samples, 1, 28, 28).to(device)  # Example: Gaussian distribution
-    sigma = torch.ones(num_samples).to(device) * 0.5  # Example: Fixed noise level
-
-    # Forward pass through the model
-    with torch.no_grad():
-        output = model(x, sigma)
-
-    # Calculate metrics (e.g., MSE, PSNR)
-    mse = F.mse_loss(output, x)
-    psnr = 20 * torch.log10(1.0 / torch.sqrt(mse))
-
-    print(f"MSE: {mse.item()}, PSNR: {psnr.item()}")
-    return mse.item(), psnr.item()
-
-
 
 # =====================
 # Dataset Class
@@ -116,7 +88,6 @@ class ImageDataset(Dataset):
         self.img_hr_height, self.img_hr_width = sample_img.shape[0], sample_img.shape[1]
         print(f"Detected high-resolution image size: {self.img_hr_height}x{self.img_hr_width}")
         
-        
     def __len__(self):
         return min(len(self.low_res_files), len(self.high_res_files))
     
@@ -126,21 +97,14 @@ class ImageDataset(Dataset):
         hr_img = np.array(Image.open(self.high_res_files[idx]).convert('L'))
         
         # Normalize to [0,1]
-        lr_img = lr_img.astype(np.float32) / 255.0
-        hr_img = hr_img.astype(np.float32) / 255.0
+        lr_img = lr_img.astype(np.float32) / 255 # TODO: ? lr_img.max()
+        hr_img = hr_img.astype(np.float32) / 255 # TODO: ? hr_img.max()
         
-        # Convert to DCT domain
-        lr_dct = cv2.dct(np.float32(lr_img))
-        hr_dct = cv2.dct(np.float32(hr_img))
+        # # Convert to DCT domain
+        # lr_dct = cv2.dct(np.float32(lr_img))
+        # hr_dct = cv2.dct(np.float32(hr_img))
 
-        # Show the DCT images for debugging
-        # cv2.imshow('High Res DCT', hr_dct)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
-        # lr_dct = dctn(lr_img) # norm='ortho'
-        # hr_dct = dctn(hr_img) # norm='ortho'
         return torch.tensor(lr_img), torch.tensor(hr_img) # Train with dense representation / image
-        return torch.tensor(lr_dct), torch.tensor(hr_dct)
 
 # =====================
 # Data Generator
@@ -151,7 +115,7 @@ class CSImageGenerator:
         self.M = M          # Measurements
         self.snr_db = snr_db
         
-    def make_measurements(self, lr_img, hr_dct):
+    def make_measurements(self, lr_img, hr_img):
         print("lr_img.shape:", lr_img.shape)
         N = lr_img.shape[0]*lr_img.shape[1]  # Number of pixels in the image
 
@@ -162,17 +126,292 @@ class CSImageGenerator:
         
         # Print shapes
         print(f"lr_img shape: {lr_img.shape}")
-        print(f"hr_dct shape: {hr_dct.shape}")
+        print(f"hr_img shape: {hr_img.shape}")
 
         # Calculate the sensing matrix
         # First move the lr_img to a tensor and device
         lr_img = torch.tensor(lr_img, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         y = lr_img.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
-        h = hr_dct.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
+        h = hr_img.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
         P = (y*torch.linalg.pinv(h)).to(device)  # Pseudo-inverse for sensing matrix
-        #y = P @ h #TODO: Add noise # P Must be a DCT transformation and downscaling measurement matrix.
+        #y = P @ h #TODO: Add noise # P Must be a downscaling measurement matrix.
 
         return y.squeeze(), P
+
+# =====================
+# ScoreNet Implementation
+# =====================
+PRINT_SIZE = False
+
+class GaussianFourierProjection(nn.Module):
+    """Gaussian random features for encoding time steps."""
+    def __init__(self, embed_dim, scale=30.):
+        super().__init__()
+        # Randomly sample weights during initialization. These weights are fixed
+        # during optimization and are not trainable.
+        self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+    def forward(self, x):
+        x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+
+class Dense(nn.Module):
+    """A fully connected layer that reshapes outputs to feature maps."""
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.dense = nn.Linear(input_dim, output_dim)
+    def forward(self, x):
+        return self.dense(x)[..., None, None]
+
+class DynamicPadCat(nn.Module):
+    def forward(self, x1, x2):
+        # x1: decoder feature, x2: encoder feature
+        diffY = x1.size()[2] - x2.size()[2]
+        diffX = x1.size()[3] - x2.size()[3]
+
+        x2 = F.pad(x2, [diffX // 2, diffX - diffX // 2,
+        diffY // 2, diffY - diffY // 2])
+        return torch.cat([x1, x2], dim=1)
+
+class ScoreNet(nn.Module):
+    """A time-dependent score-based model built upon U-Net architecture."""
+
+    def __init__(self, marginal_prob_std, img_height, img_width, channels=[32, 64, 128, 256], embed_dim=256):
+        """Initialize a time-dependent score-based network.
+
+        Args:
+            marginal_prob_std: A function that takes time t and gives the standard
+                deviation of the perturbation kernel p_{0t}(x(t) | x(0)).
+            channels: The number of channels for feature maps of each resolution.
+            embed_dim: The dimensionality of Gaussian random feature embeddings.
+        """
+        super().__init__()
+
+        if img_height == 32 and img_width == 40:
+
+            # Gaussian random feature embedding layer for time
+            self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+            nn.Linear(embed_dim, embed_dim))
+            # Encoding layers where the resolution decreases
+            self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
+            self.dense1 = Dense(embed_dim, channels[0])
+            self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
+            self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=4, stride=2, padding=1, bias=False)
+            self.dense2 = Dense(embed_dim, channels[1])
+            self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
+            self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=(2,4), stride=2, padding=1, bias=False)
+            self.dense3 = Dense(embed_dim, channels[2])
+            self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
+            self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=3, stride=2, padding=0, bias=False)
+            self.dense4 = Dense(embed_dim, channels[3])
+            self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+
+            # Decoding layers where the resolution increases
+            self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=0, bias=False)
+            self.dense5 = Dense(embed_dim, channels[2])
+            self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
+            self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=(2,4), stride=2, padding=1, bias=False)
+            self.dense6 = Dense(embed_dim, channels[1])
+            self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
+            self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
+            self.dense7 = Dense(embed_dim, channels[0])
+            self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
+            self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
+
+        elif img_height == 128 and img_width == 160:
+            # Gaussian random feature embedding layer for time
+            self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+            nn.Linear(embed_dim, embed_dim))
+            # Encoding layers where the resolution decreases
+            self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
+            self.dense1 = Dense(embed_dim, channels[0])
+            self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
+            self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=(2,8), stride=2, padding=1, bias=False)
+            self.dense2 = Dense(embed_dim, channels[1])
+            self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
+            self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=(3,8), stride=2, padding=1, bias=False)
+            self.dense3 = Dense(embed_dim, channels[2])
+            self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
+            self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=3, stride=2, padding=0, bias=False)
+            self.dense4 = Dense(embed_dim, channels[3])
+            self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+
+            # Decoding layers where the resolution increases
+            self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=0, bias=False)
+            self.dense5 = Dense(embed_dim, channels[2])
+            self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
+            self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=(3,8), stride=2, padding=1, bias=False)
+            self.dense6 = Dense(embed_dim, channels[1])
+            self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
+            self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=(2,8), stride=2, padding=1, bias=False)
+            self.dense7 = Dense(embed_dim, channels[0])
+            self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
+            self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
+
+        elif img_height == 512 and img_width == 640:
+            # Gaussian random feature embedding layer for time
+            self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+            nn.Linear(embed_dim, embed_dim))
+            # Encoding layers where the resolution decreases
+            self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
+            self.dense1 = Dense(embed_dim, channels[0])
+            self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
+            self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=(4,12), stride=4, padding=0, bias=False)
+            self.dense2 = Dense(embed_dim, channels[1])
+            self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
+            self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=(2,16), stride=2, padding=1, bias=False)
+            self.dense3 = Dense(embed_dim, channels[2])
+            self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
+            self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=3, stride=2, padding=0, bias=False)
+            self.dense4 = Dense(embed_dim, channels[3])
+            self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+
+            # Decoding layers where the resolution increases
+            self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=0, bias=False)
+            self.dense5 = Dense(embed_dim, channels[2])
+            self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
+            self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=(2,16), stride=2, padding=1, bias=False)
+            self.dense6 = Dense(embed_dim, channels[1])
+            self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
+            self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=(4,12), stride=4, padding=0, bias=False)
+            self.dense7 = Dense(embed_dim, channels[0])
+            self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
+            self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
+        else:
+            raise ValueError("Unsupported image size. Supported sizes are (512, 640), (128, 160) and (32x40).")
+
+        # Modify transpose convs for non-square outputs
+        self.padcat = DynamicPadCat()
+
+        # The swish activation function
+        self.act = lambda x: x * torch.sigmoid(x)
+        self.marginal_prob_std = marginal_prob_std
+
+    def forward(self, x, t):
+        # Obtain the Gaussian random feature embedding for t
+
+        embed = self.act(self.embed(t))
+
+        # Encoding path
+        h1 = self.conv1(x)
+
+        ## Incorporate information from t
+        h1 += self.dense1(embed)
+        ## Group normalization
+        h1 = self.gnorm1(h1)
+        h1 = self.act(h1)
+        h2 = self.conv2(h1)
+
+        h2 += self.dense2(embed)
+        h2 = self.gnorm2(h2)
+        h2 = self.act(h2)
+        h3 = self.conv3(h2)
+
+        h3 += self.dense3(embed)
+        h3 = self.gnorm3(h3)
+        h3 = self.act(h3)
+        h4 = self.conv4(h3)
+
+        h4 += self.dense4(embed)
+        h4 = self.gnorm4(h4)
+        h4 = self.act(h4)
+
+        if PRINT_SIZE:
+            print("t.shape:", t.shape)
+            print("x.shape:", x.shape)  
+            print("embed.shape:", embed.shape)
+            print("h1.shape:", h1.shape)
+            print("h2.shape:", h2.shape)
+            print("h3.shape:", h3.shape)
+            print("h4.shape:", h4.shape)
+
+        h = self.tconv4(h4)
+        if PRINT_SIZE: print("h.shape: self.tconv4(h4)", h.shape)
+
+        h += self.dense5(embed)
+        if PRINT_SIZE:  print("h.shape self.dense5(embed):", h.shape)
+
+        h = self.tgnorm4(h)
+        if PRINT_SIZE:  print("h.shape: self.tgnorm4(h)", h.shape)
+
+        h = self.act(h)
+        if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
+
+        h = self.tconv3(self.padcat(h, h3))  # Modified
+        if PRINT_SIZE:  print("h.shape: self.tconv3(self.padcat(h, h3))  # Modified", h.shape)
+
+        h += self.dense6(embed)
+        if PRINT_SIZE:  print("h.shape: self.dense6(embed)", h.shape)
+
+        h = self.tgnorm3(h)
+        if PRINT_SIZE:  print("h.shape: self.tgnorm3(h)", h.shape)
+
+        h = self.act(h)
+        if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
+
+        h = self.tconv2(self.padcat(h, h2))  # Modified
+        if PRINT_SIZE:  print("h.shape: self.tconv2(self.padcat(h, h2))", h.shape)
+
+        h += self.dense7(embed)
+        if PRINT_SIZE:  print("h.shape: self.dense7(embed)", h.shape)
+        h = self.tgnorm2(h)
+        if PRINT_SIZE:  print("h.shape: self.tgnorm2(h)", h.shape)
+
+        h = self.act(h)
+        if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
+
+        h = self.tconv1(self.padcat(h, h1))  # Modified
+        if PRINT_SIZE:  print("h.shape: self.tconv1(self.padcat(h, h1))  # Modified", h.shape)
+
+        return h / self.marginal_prob_std(t)[:, None, None, None]
+
+def marginal_prob_std(t, sigma):
+    """Compute the mean and standard deviation of $p_{0t}(x(t) | x(0))$.
+
+    Args:
+        t: A vector of time steps.
+        sigma: The $\sigma$ in our SDE.
+
+    Returns:
+        The standard deviation.
+    """
+    t = torch.tensor(t, device=device)
+    return torch.sqrt((sigma**(2 * t) - 1.) / 2. / np.log(sigma))
+
+def diffusion_coeff(t, sigma):
+    """Compute the diffusion coefficient of our SDE.
+
+    Args:
+        t: A vector of time steps.
+        sigma: The $\sigma$ in our SDE.
+
+    Returns:
+        The vector of diffusion coefficients.
+    """
+    return torch.tensor(sigma**t, device=device)
+
+sigma =  25.0#@param {'type':'number'}
+marginal_prob_std_fn = functools.partial(marginal_prob_std, sigma=sigma)
+diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma)
+
+def loss_fn(model, x, marginal_prob_std, eps=1e-5):
+    """The loss function for training score-based generative models.
+
+    Args:
+        model: A PyTorch model instance that represents a
+            time-dependent score-based model.
+        x: A mini-batch of training data.
+        marginal_prob_std: A function that gives the standard deviation of
+            the perturbation kernel.
+        eps: A tolerance value for numerical stability.
+    """
+    random_t = torch.rand(x.shape[0], device=x.device) * (1. - eps) + eps
+    z = torch.randn_like(x)
+    std = marginal_prob_std(random_t)
+    perturbed_x = x + z * std[:, None, None, None]
+    score = model(perturbed_x, random_t)
+    loss = torch.mean(torch.sum((score * std[:, None, None, None] + z)**2, dim=(1,2,3)))
+    return loss
 
 # =====================
 # NCSN Implementation
@@ -295,13 +534,13 @@ def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0
         sigma = torch.ones(batch_size).to(device) * noise_schedule.sigmas[epoch]
 
         start_time = time.time()
-        for batch_idx, (_, hr_dct) in enumerate(dataloader):
+        for batch_idx, (_, hr_img) in enumerate(dataloader):
             # Move data to device and add channel dimension
-            hr_dct = hr_dct.unsqueeze(1).to(device)  # [B, 1, H, W]
+            hr_img = hr_img.unsqueeze(1).to(device)  # [B, 1, H, W]
             
             # Add noise to clean images
-            noise = torch.randn_like(hr_dct)  # [B, 1, H, W]
-            noisy_dct = hr_dct + noise * sigma.view(-1, 1, 1, 1)  # Scale noise by sigma
+            noise = torch.randn_like(hr_img)  # [B, 1, H, W]
+            noisy_dct = hr_img + noise * sigma.view(-1, 1, 1, 1)  # Scale noise by sigma
 
             # Compute score target (-noise/sigma)
             target = -noise / (sigma.view(-1, 1, 1, 1)**2) # + 1e-5 # Avoid division by zero
@@ -329,7 +568,7 @@ def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0
                 print(f"Epoch {epoch+1}/{num_epochs} | Batch {batch_idx}/{len(dataloader)} "
                       f"| Loss: {loss.item():.4f} | Sigma: {sigma.mean().item():.4f}±{sigma.std().item():.4f}")
         
-        show_resized_dct_image(hr_dct[0, 0].detach().cpu().numpy(), "train original", wait=True)
+        show_resized_dct_image(hr_img[0, 0].detach().cpu().numpy(), "train original", wait=True)
         show_resized_dct_image(noisy_dct[0, 0].detach().cpu().numpy(), "train noisy", wait=True)
 
         # Model training evaluation
@@ -365,7 +604,7 @@ def train_ncsn(dataset, batch_size=32, num_epochs=10, num_scales=10, sigma_min=0
 def annealed_langevin_dynamics(y, P, model, img_shape, num_epochs, num_scales, sigma_min, sigma_max, anneal_power, steps_per_noise=10):
     noise_schedule = NoiseSchedule(num_scales=num_epochs, sigma_min=sigma_min, sigma_max=sigma_max)
     current_h = torch.rand(1, 1, *img_shape, device=device, requires_grad=True)
-    # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), "initial current h", wait=True)
+    
     # Store reconstruction process
     reconstruction_process = []
     
@@ -377,30 +616,23 @@ def annealed_langevin_dynamics(y, P, model, img_shape, num_epochs, num_scales, s
             
             # Data fidelity term
             h_flat = current_h.view(-1) # Flatten the current estimate from ([1, 1, 128, 160]) to ([20480])
-            show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"h_flat Step {step}", wait=True)
-            # print("h_flat.shape:", h_flat.shape)
-            # print("current_h.shape:", current_h.shape)
+            # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"h_flat Step {step}", wait=True)
+
             residual = y - P @ h_flat
-            # print("residual.shape:", residual.shape)
-            # print("P.shape:", P.shape)
-            # print("P @ h_flat.shape:", (P @ h_flat).shape)
-            # input()
+
             grad_likelihood = residual @ P
-            print("grad_likelihood.shape:", grad_likelihood.shape)
-            #show_resized_dct_image(grad_likelihood[0, 0].detach().cpu().numpy(), f"Gradlikelihood Step {step}", wait=True)
+            
             # Prior term
             with torch.no_grad():
                 score = model(current_h, sigma * torch.ones(1, device=device))
-            # print("score.shape:", score.shape)
-            # show_resized_dct_image(score[0, 0].detach().cpu().numpy(), f"score Step {step}", wait=True)
             
             # Langevin update
             noise_term = torch.sqrt(2 * step_size) * torch.randn_like(current_h)
-            show_resized_dct_image(noise_term[0, 0].detach().cpu().numpy(), f"noise_term Step {step}", wait=True)
-            # print("noise_term.shape:", noise_term.shape)
+            # show_resized_dct_image(noise_term[0, 0].detach().cpu().numpy(), f"noise_term Step {step}", wait=True)
+            # # print("noise_term.shape:", noise_term.shape)
             
             current_h = current_h + step_size * (score + 0.1*grad_likelihood.view_as(current_h)) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
-            show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"current_h Step {step}", wait=True)
+            # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"current_h Step {step}", wait=True)
 
         reconstruction_process.append(current_h.detach().cpu().numpy())
         #show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
@@ -428,16 +660,16 @@ def psnr(original, reconstructed):
     mse = np.mean((original - reconstructed)**2)
     return 20 * np.log10(1.0 / np.sqrt(mse + 1e-10))
 
-def reconstruct_and_evaluate(y, P, model, hr_dct, num_epochs, num_scales, sigma_min, sigma_max, anneal_power):
+def reconstruct_and_evaluate(y, P, model, hr_img, num_epochs, num_scales, sigma_min, sigma_max, anneal_power):
     """Evaluate reconstruction method"""
     results = {}
     # NCSN method
     start = time.time()
-    ncsn_recon, process = annealed_langevin_dynamics(y, P, model, hr_dct.shape, num_epochs=num_epochs, 
+    ncsn_recon, process = annealed_langevin_dynamics(y, P, model, hr_img.shape, num_epochs=num_epochs, 
                                 num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
     results['ncsn'] = {
         'time': time.time() - start,
-        'nmse': calculate_nmse(hr_dct.numpy(), ncsn_recon),
+        'nmse': calculate_nmse(hr_img.numpy(), ncsn_recon),
         'image': ncsn_recon,
         'process': process
     }
@@ -447,7 +679,7 @@ def reconstruct_and_evaluate(y, P, model, hr_dct, num_epochs, num_scales, sigma_
 # =====================
 # 5. Visualization
 # =====================
-def plot_results(results, hr_dct):
+def plot_results(results, hr_img):
     plt.figure(figsize=(18, 6))
 
     # NCSN
@@ -457,7 +689,7 @@ def plot_results(results, hr_dct):
     
     # Ground Truth
     plt.subplot(1, 3, 3)
-    plt.imshow(cv2.idct(hr_dct.numpy()), cmap='gray')
+    plt.imshow(cv2.idct(hr_img.numpy()), cmap='gray')
     plt.title("Ground Truth")
     
     plt.tight_layout()
@@ -501,78 +733,191 @@ def show_resized_dct_image(img_dct, title, wait=False):
     if wait:
         plt.show()
 
+def train_score_model():
+    score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1], channels=[32, 64, 128, 256], embed_dim=256))
+    score_model = score_model.to(device)
+    optimizer = optim.Adam(score_model.parameters(), lr=learning_rate)
+
+    for epoch in range(0, num_epochs):
+        avg_loss = 0.
+        num_items = 0
+        start_epoch_time = time.time()
+        batch_idx = 0
+        for _, hr_img in data_loader:
+            hr_img = hr_img.to(device)
+            hr_img = hr_img.view(-1, 1, hr_img.shape[1], hr_img.shape[2]) # Reshape to (batch_size, channels, height, width)
+            loss = loss_fn(score_model, hr_img, marginal_prob_std_fn)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            avg_loss += loss.item() * hr_img.shape[0]
+            num_items += hr_img.shape[0]
+            batch_idx += 1
+            if batch_idx % 10 == 0:
+                print('Epoch:', epoch, '| Batch:', batch_idx, '| Loss: {:5f}'.format(loss.item()))\
+        
+        print('Epoch:', epoch, '/', num_epochs, '| Average Loss: {:5f}'.format(avg_loss / num_items), '| Time:', time.time() - start_epoch_time)
+        
+        # Update the checkpoint after each epoch of training.
+        torch.save(score_model.state_dict(), '/checkpoints/ckpt.pth')
+    return score_model
+from scipy import integrate
+
+# TODO: Clean up the code and remove unnecessary comments
+## The error tolerance for the black-box ODE solver
+error_tolerance = 1e-5 #@param {'type': 'number'}
+def ode_sampler(score_model,
+                marginal_prob_std,
+                diffusion_coeff,
+                batch_size=64,
+                atol=error_tolerance,
+                rtol=error_tolerance,
+                device='cuda',
+                z=None,
+                eps=1e-3):
+  """Generate samples from score-based models with black-box ODE solvers.
+
+  Args:
+    score_model: A PyTorch model that represents the time-dependent score-based model.
+    marginal_prob_std: A function that returns the standard deviation
+      of the perturbation kernel.
+    diffusion_coeff: A function that returns the diffusion coefficient of the SDE.
+    batch_size: The number of samplers to generate by calling this function once.
+    atol: Tolerance of absolute errors.
+    rtol: Tolerance of relative errors.
+    device: 'cuda' for running on GPUs, and 'cpu' for running on CPUs.
+    z: The latent code that governs the final sample. If None, we start from p_1;
+      otherwise, we start from the given z.
+    eps: The smallest time step for numerical stability.
+  """
+  t = torch.ones(batch_size, device=device)
+  # Create the latent code
+  if z is None:
+    print('hr_img.shape:', hr_img.shape)
+    init_x = torch.randn(batch_size, 1, hr_img.shape[0], hr_img.shape[1], device=device) \
+      * marginal_prob_std(t)[:, None, None, None]
+  else:
+    init_x = z
+
+  shape = init_x.shape
+  # print('init_x.shape:', init_x.shape)
+  def score_eval_wrapper(sample, time_steps):
+    """A wrapper of the score-based model for use by the ODE solver."""
+    sample = torch.tensor(sample, device=device, dtype=torch.float32).reshape(shape)
+    # print('sample.shape:', sample.shape)
+    time_steps = torch.tensor(time_steps, device=device, dtype=torch.float32).reshape(batch_size)# .reshape(sample.shape[0], sample.shape[1])
+    # print('time_steps.shape:', time_steps.shape)
+    with torch.no_grad():
+      score = score_model(sample, time_steps) # HERE
+    # print('score.shape:', score.shape)
+    return score.cpu().numpy().reshape((-1,)).astype(np.float64)
+
+  def ode_func(t, x):
+    """The ODE function for use by the ODE solver."""
+    time_steps = np.ones((shape[0],)) * t
+    g = diffusion_coeff(torch.tensor(t)).cpu().numpy()
+    # print("score_eval_wrapper(x, time_steps).shape:", score_eval_wrapper(x, time_steps).shape)
+    return  -0.5 * (g**2) * score_eval_wrapper(x, time_steps)
+
+  # Run the black-box ODE solver.
+  # print("init_x.flatten().cpu().numpy().shape:", init_x.flatten().cpu().numpy().shape)
+  # print("init_x.reshape(-1).cpu().numpy().shape:", init_x.reshape(-1).cpu().numpy().shape)
+  res = integrate.solve_ivp(ode_func, (1., eps), init_x.flatten().cpu().numpy(), rtol=rtol, atol=atol, method='RK45')
+  print(f"Number of function evaluations: {res.nfev}")
+  x = torch.tensor(res.y[:, -1], device=device).reshape(shape)
+
+  return x
+
+from torchvision.utils import make_grid
+
+
 # =====================
 # Main Workflow
 # =====================
 if __name__ == "__main__":
 
-    if task == 'verify':
-        # Generate samples from a known distribution
-        generate_known_distribution_samples_in_directory(num_samples=1000, save_dir='images/known_distribution')
-        exit()
-        # Load data
-        dataset = ImageDataset(
-            high_res_dir='images/known_distribution\hr',
-            low_res_dir='images/known_distribution\lr',
-        )
-        ncsn_model = train_ncsn(dataset, batch_size=16, lr=learning_rate, num_epochs=1, 
-                                num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
-        # Save the model
-        torch.save(ncsn_model.state_dict(), 'ncsn_model.pth')
-        # Train the NCSN model on the known distribution
-        NCSN = NCSN(28, 28).to(device)  # Example: 28x28 images
-
-        # Test the network with a known distribution
-        test_network_with_known_distribution(NCSN, num_samples=1000)
-        exit(0)
-
     # Load data
     dataset = ImageDataset(
-        low_res_dir='images/low_res_train/LR_train',
-        high_res_dir='images/medium_res_train/MR_train'
+        low_res_dir='images/low_res_train',
+        high_res_dir='images/low_res_train'
     )
-    
+
+    # Get image dimensions
+    data_loader = DataLoader(dataset, batch_size=batch_size) #, num_workers=2)
+
+    # Get first image from dataset
+    lr_img, hr_img = dataset[0]
+    print('lr_img.shape:', lr_img.shape)
+    print('hr_img.shape:', hr_img.shape)
+
+    # Dimensions
+    hr_shape = hr_img.shape     # High resolution shape (x)
+    lr_shape = lr_img.shape     # Low resolution shape (y)
+    n = hr_img.shape[0] * hr_img.shape[1]
+    m = lr_img.shape[0] * lr_img.shape[1]
+    print("N: ", n, "M: ", m)
+
     # Train ncsn model
     if task == 'train':
         print("Training score model...")
-        ncsn_model = train_ncsn(dataset, batch_size=batch_size, lr=learning_rate, num_epochs=num_epochs, 
-                                num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
-        torch.save(ncsn_model.state_dict(), 'ncsn_model.pth')
+        if USE_NCSN_MODEL:
+            score_model = train_ncsn(dataset, batch_size=batch_size, lr=learning_rate, num_epochs=num_epochs, 
+                                    num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
+            torch.save(score_model.state_dict(), 'ncsn_model.pth')
+        else:
+            score_model = train_score_model()
+            torch.save(score_model.state_dict(), 'score_model.pth')
+
     else: # Load pre-trained model
         print("Loading pre-trained score model...")
-        ncsn_model = NCSN(dataset.img_hr_height, dataset.img_hr_width).to(device)
-        ncsn_model.load_state_dict(torch.load('ncsn_model_img_new_loss_100epoch_32batch_1e-3lr_2Anneal_power_.pth'))
-        ncsn_model.eval()
+        if USE_NCSN_MODEL:
+            score_model = NCSN(dataset.img_hr_height, dataset.img_hr_width).to(device)
+        else:
+            score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1], channels=[32, 64, 128, 256], embed_dim=256))
+            score_model = score_model.to(device)
+        score_model.load_state_dict(torch.load('score_model.pth'))
+        score_model.eval()
     
-    # Test reconstruction
-    test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
-    lr_dct, hr_dct = dataset[0]
-    reduction_factor = 0.8
-    print("size of hr_dct:", hr_dct.detach().cpu().numpy().shape)
-    print("int(hr_dct.shape[0]*reduction_factor):", int(hr_dct.shape[0]*reduction_factor))
-    print("int(hr_dct.shape[1]*reduction_factor):", int(hr_dct.shape[1]*reduction_factor))
-    hr_dct_half = cv2.resize(hr_dct.detach().cpu().numpy(), (int(hr_dct.shape[1]*reduction_factor), int(hr_dct.shape[0]*reduction_factor)))
-    print("size of hr_dct_half:", hr_dct_half.shape)
-    # cv2.imshow('High Res DCT Half', hr_dct_half)
-    # cv2.waitKey(0)
+    if USE_NCSN_MODEL:
+        # Generate measurements
+        test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
+        y, P = test_generator.make_measurements(lr_img, hr_img) #lr_dct
+        print("y.shape:", y.shape)
+        print("P.shape:", P.shape)
 
-    # TODO:
-    # - OMP
-    # - Train model with known distruvtion bernouli gaussian
-    # - Reconstruct with a lot of measurements
+        # Evaluate both methods
+        results = reconstruct_and_evaluate(y, P, score_model, hr_img, num_epochs=num_epochs, 
+                                    num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
 
-    #lr_img = cv2.idct(lr_dct.numpy())
-    y, P = test_generator.make_measurements(hr_dct_half, hr_dct) #lr_dct
-    
-    print("y.shape:", y.shape)
-    print("P.shape:", P.shape)
-    # Evaluate both methods
-    results = reconstruct_and_evaluate(y, P, ncsn_model, hr_dct, num_epochs=num_epochs, 
-                                num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
+        # Print metrics
+        print("\nEvaluation Results:")
+        print(f"NCSN Method - NMSE: {results['ncsn']['nmse']:.4f}, Time: {results['ncsn']['time']:.2f}s")
+        
+        # Visualize
+        plot_results(results, hr_img)
+    else:
+        # ## Load the pre-trained checkpoint from disk.
+        # device = 'cuda' #@param ['cuda', 'cpu'] {'type':'string'}
+        # ckpt = torch.load('/checkpoints/ckpt.pth', map_location=device)
+        # score_model.load_state_dict(ckpt)
 
-    # Print metrics
-    print("\nEvaluation Results:")
-    print(f"NCSN Method - NMSE: {results['ncsn']['nmse']:.4f}, Time: {results['ncsn']['time']:.2f}s")
-    
-    # Visualize
-    plot_results(results, hr_dct)
+        sample_batch_size = 64 #@param {'type':'integer'}
+        sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
+
+        ## Generate samples using the specified sampler.
+        samples = sampler(score_model,
+                        marginal_prob_std_fn,
+                        diffusion_coeff_fn,
+                        sample_batch_size,
+                        device=device)
+
+        ## Sample visualization.
+        #samples = samples.clamp(0.0, 1.0)
+        import matplotlib.pyplot as plt
+        sample_grid = make_grid(samples, nrow=int(np.sqrt(sample_batch_size)))
+
+        plt.figure(figsize=(6,6))
+        plt.axis('off')
+        plt.imshow(sample_grid.permute(1, 2, 0).cpu()) #, vmin=0., vmax=1.)
+        plt.show()
+        plt.savefig("batch generated")

@@ -100,8 +100,8 @@ def construct_A_explicit(m,n):
 if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
-        low_res_dir='images/low_res_train/LR_train',
-        high_res_dir='images/medium_res_train/MR_train'
+        low_res_dir='images/low_res_train',
+        high_res_dir='images/medium_res_train'
     )
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
     n_components = dataset.img_hr_height * dataset.img_hr_width
