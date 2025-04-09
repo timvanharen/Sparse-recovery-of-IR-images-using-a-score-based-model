@@ -20,7 +20,7 @@ USE_NCSN_MODEL = False  # Set to False to use ScoreNet instead
 
 # Global configuration variables
 task = 'train' #'train' # 'test  # Task name
-batch_size = 128
+batch_size = 256
 num_epochs = 5
 learning_rate = 1e-4
 num_scales = num_epochs
@@ -771,7 +771,7 @@ def train_score_model():
         print('Epoch:', epoch, '/', num_epochs, '| Average Loss: {:5f}'.format(avg_loss / num_items), '| Time:', time.time() - start_epoch_time)
         
         # Update the checkpoint after each epoch of training.
-        torch.save(score_model.state_dict(), 'ckpt.pth')
+        torch.save(score_model.state_dict(), 'checkpoints/ckpt.pth')
     return score_model
 from scipy import integrate
 
