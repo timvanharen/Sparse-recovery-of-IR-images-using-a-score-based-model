@@ -771,7 +771,7 @@ def train_score_model():
         print('Epoch:', epoch, '/', num_epochs, '| Average Loss: {:5f}'.format(avg_loss / num_items), '| Time:', time.time() - start_epoch_time)
         
         # Update the checkpoint after each epoch of training.
-        torch.save(score_model.state_dict(), '/checkpoints/ckpt.pth')
+        torch.save(score_model.state_dict(), 'ckpt.pth')
     return score_model
 from scipy import integrate
 
