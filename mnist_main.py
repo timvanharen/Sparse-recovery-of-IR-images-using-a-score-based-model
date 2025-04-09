@@ -35,17 +35,6 @@ print("Configuration:")
 for k, v in config.items():
     print(f"{k}: {v}")
 
-HR_train_data_output_dir = Path("./images/high_res_train")
-HR_test_data_output_dir = Path("./images/high_res_test")
-frikandel_train_data_output_dir = Path("./images/frikandel_train")
-frikandel_test_data_output_dir = Path("./images/frikandel_test")
-half_train_data_output_dir = Path("./images/half_res_train")
-half_test_data_output_dir = Path("./images/half_res_test")
-MR_train_data_output_dir = Path("./images/medium_res_train")
-MR_test_data_output_dir = Path("./images/medium_res_test")
-LR_train_data_output_dir = Path("./images/low_res_train")
-LR_test_data_output_dir = Path("./images/low_res_test")
-
 # Create checkpoint directory if it doesn't exist
 if not os.path.exists('checkpoints'):
     os.makedirs('checkpoints')
@@ -74,42 +63,6 @@ if not os.path.exists('checkpoints'):
 # - Structure the code base and remove unused code and files
 
 # =====================
-# Dataset Class
-# =====================
-class ImageDataset(Dataset):
-    def __init__(self, low_res_dir, high_res_dir):
-        self.low_res_files = sorted(glob.glob(os.path.join(low_res_dir, '*.jpg')))
-        self.high_res_files = sorted(glob.glob(os.path.join(high_res_dir, '*.jpg')))
-        
-        # Detect image size from first sample of the low_res directory
-        sample_img = np.array(Image.open(self.low_res_files[0]))
-        self.img_lr_height, self.img_lr_width = sample_img.shape[0], sample_img.shape[1]
-        print(f"Detected low-resolution image size: {self.img_lr_height}x{self.img_lr_width}")
-
-        # Detect image size from first sample of the high_res directory
-        sample_img = np.array(Image.open(self.high_res_files[0]))
-        self.img_hr_height, self.img_hr_width = sample_img.shape[0], sample_img.shape[1]
-        print(f"Detected high-resolution image size: {self.img_hr_height}x{self.img_hr_width}")
-        
-    def __len__(self):
-        return min(len(self.low_res_files), len(self.high_res_files))
-    
-    def __getitem__(self, idx):
-        # Load image pair
-        lr_img = np.array(Image.open(self.low_res_files[idx]).convert('L'))  # Grayscale
-        hr_img = np.array(Image.open(self.high_res_files[idx]).convert('L'))
-        
-        # Normalize to [0,1]
-        lr_img = lr_img.astype(np.float32) / 255 # TODO: ? lr_img.max()
-        hr_img = hr_img.astype(np.float32) / 255 # TODO: ? hr_img.max()
-        
-        # # Convert to DCT domain
-        # lr_dct = cv2.dct(np.float32(lr_img))
-        # hr_dct = cv2.dct(np.float32(hr_img))
-
-        return torch.tensor(lr_img), torch.tensor(hr_img) # Train with dense representation / image
-
-# =====================
 # Data Generator
 # =====================
 class CSImageGenerator:
@@ -118,9 +71,9 @@ class CSImageGenerator:
         self.M = M          # Measurements
         self.snr_db = snr_db
         
-    def make_measurements(self, lr_img, hr_img):
-        print("lr_img.shape:", lr_img.shape)
-        N = lr_img.shape[0]*lr_img.shape[1]  # Number of pixels in the image
+    def make_measurements(self, x, y):
+        print("x.shape:", x.shape)
+        N = x.shape[0]*x.shape[1]  # Number of pixels in the image
 
         print(f"Generating measurements for N={N} and M={self.M}")
         # Ensure M < N
@@ -128,14 +81,14 @@ class CSImageGenerator:
             raise ValueError("Number of measurements M must be less than the number of pixels N.")
         
         # Print shapes
-        print(f"lr_img shape: {lr_img.shape}")
-        print(f"hr_img shape: {hr_img.shape}")
+        print(f"x shape: {x.shape}")
+        print(f"y shape: {y.shape}")
 
         # Calculate the sensing matrix
-        # First move the lr_img to a tensor and device
-        lr_img = torch.tensor(lr_img, dtype=torch.float32).to(device)  # Convert to tensor and move to device
-        y = lr_img.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
-        h = hr_img.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
+        # First move the x to a tensor and device
+        x = torch.tensor(x, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        y = x.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
+        h = y.flatten()[:, torch.newaxis].to(device)  # Flatten and move to device
         P = (y*torch.linalg.pinv(h)).to(device)  # Pseudo-inverse for sensing matrix
         #y = P @ h #TODO: Add noise # P Must be a downscaling measurement matrix.
 
@@ -202,7 +155,7 @@ class ScoreNet(nn.Module):
         self.dense2 = Dense(embed_dim, channels[1])
         self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
 
-        self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=4, stride=2, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=3, stride=2, padding=1, bias=False)
         self.dense3 = Dense(embed_dim, channels[2])
         self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
 
@@ -223,7 +176,7 @@ class ScoreNet(nn.Module):
 
         self.dense7 = Dense(embed_dim, channels[2])
         self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
-        self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=4, stride=2, padding=1, bias=False)
+        self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=3, stride=2, padding=1, bias=False)
 
         self.dense8 = Dense(embed_dim, channels[1])
         self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
@@ -245,7 +198,6 @@ class ScoreNet(nn.Module):
         embed = self.act(self.embed(t))
 
         # Encoding path
-        print("x.shape:", x.shape)
         h1 = self.conv1(x)
 
         ## Incorporate information from t
@@ -268,12 +220,6 @@ class ScoreNet(nn.Module):
         h4 += self.dense4(embed)
         h4 = self.gnorm4(h4)
         h4 = self.act(h4)
-        h5 = self.conv5(h4)
-
-        h5 += self.dense5(embed)
-        h5 = self.gnorm5(h5)
-        h5 = self.act(h5)
-
         if PRINT_SIZE:
             print("t.shape:", t.shape)
             print("x.shape:", x.shape)  
@@ -282,6 +228,13 @@ class ScoreNet(nn.Module):
             print("h2.shape:", h2.shape)
             print("h3.shape:", h3.shape)
             print("h4.shape:", h4.shape)
+        h5 = self.conv5(h4)
+        
+        h5 += self.dense5(embed)
+        h5 = self.gnorm5(h5)
+        h5 = self.act(h5)
+
+        if PRINT_SIZE:
             print("h5.shape:", h5.shape)
 
         # DeConv 5
@@ -353,7 +306,7 @@ def marginal_prob_std(t, sigma):
         The standard deviation.
     """
     t = torch.tensor(t, device=device)
-    return (torch.sqrt((sigma**(2 * t) - 1.) / 2. / np.log(sigma))/np.sqrt(sigma) - 1./2.) * np.sqrt(sigma) # TODO: Check this formula
+    return (torch.sqrt((sigma**(2 * t) - 1.) / 2. / np.log(sigma)))#/np.sqrt(sigma) - 1./2.) * np.sqrt(sigma) # TODO: Check this formula
 
 def diffusion_coeff(t, sigma):
     """Compute the diffusion coefficient of our SDE.
@@ -367,7 +320,7 @@ def diffusion_coeff(t, sigma):
     """
     return torch.tensor(sigma**t, device=device)
 
-sigma_noise =  2 #@param {'type':'number'}
+sigma_noise =  25 #@param {'type':'number'}
 marginal_prob_std_fn = functools.partial(marginal_prob_std, sigma=sigma_noise)
 diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma_noise)
 
@@ -375,7 +328,7 @@ diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma_noise)
 def plot_marginal_prob_std():
     t = torch.linspace(0, 1, 10000)
     std = marginal_prob_std(t, sigma_noise).cpu().numpy()
-    std = std/np.sqrt(sigma_noise) - np.ones(std.shape)/2
+    #std = std/np.sqrt(sigma_noise) - np.ones(std.shape)/2
     plt.hist(std, bins=100, density=True)
     plt.title("Marginal Probability Standard Deviation, sigma_noise={}".format(sigma_noise))
     plt.xlabel("Standard Deviation")
@@ -549,15 +502,15 @@ def psnr(original, reconstructed):
     mse = np.mean((original - reconstructed)**2)
     return 20 * np.log10(1.0 / np.sqrt(mse + 1e-10))
 
-def reconstruct_and_evaluate(y, P, model, hr_img, num_epochs, num_scales, sigma_min, sigma_max, anneal_power):
+def reconstruct_and_evaluate(y, P, model, x, num_epochs, num_scales, sigma_min, sigma_max, anneal_power):
     """Evaluate reconstruction method"""
     results = {}
     start = time.time()
-    ncsn_recon, process = annealed_langevin_dynamics(y, P, model, hr_img.shape, num_epochs=num_epochs, 
+    ncsn_recon, process = annealed_langevin_dynamics(y, P, model, x.shape, num_epochs=num_epochs, 
                                 num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
     results['score_model'] = {
         'time': time.time() - start,
-        'nmse': calculate_nmse(hr_img.numpy(), ncsn_recon),
+        'nmse': calculate_nmse(y.numpy(), ncsn_recon),
         'image': ncsn_recon,
         'process': process
     }
@@ -566,7 +519,7 @@ def reconstruct_and_evaluate(y, P, model, hr_img, num_epochs, num_scales, sigma_
 # =====================
 # 5. Visualization
 # =====================
-def plot_results(results, hr_img):
+def plot_results(results, y):
     plt.figure(figsize=(18, 6))
 
     # score model
@@ -576,7 +529,7 @@ def plot_results(results, hr_img):
     
     # Ground Truth
     plt.subplot(1, 2, 2)
-    plt.imshow(cv2.idct(hr_img.numpy()), cmap='gray')
+    plt.imshow(cv2.idct(y.numpy()), cmap='gray')
     plt.title("Ground Truth")
     
     plt.tight_layout()
@@ -630,16 +583,16 @@ def train_score_model():
         num_items = 0
         start_epoch_time = time.time()
         batch_idx = 0
-        for lr_img, hr_img in data_loader:
-            hr_img = hr_img.to(device)
-            hr_img = hr_img.view(-1, 1, hr_img.shape[1], hr_img.shape[2]) # Reshape to (batch_size, channels, height, width)
+        for x, y in data_loader:
+            x = x.to(device)
+            #x = x.view(-1, 1, x.shape[1], x.shape[2]) # Reshape to (batch_size, channels, height, width)
             
-            loss = loss_fn(score_model, hr_img, marginal_prob_std_fn, show_image=False)
+            loss = loss_fn(score_model, x, marginal_prob_std_fn, show_image=False)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            avg_loss += loss.item() * hr_img.shape[0]
-            num_items += hr_img.shape[0]
+            avg_loss += loss.item() * x.shape[0]
+            num_items += x.shape[0]
             batch_idx += 1
             #print("batch_idx:", batch_idx)
             #break
@@ -683,8 +636,7 @@ def ode_sampler(score_model,
   t = torch.ones(batch_size, device=device)
   # Create the latent code
   if z is None:
-    print('hr_img.shape:', hr_img.shape)
-    init_x = torch.randn(batch_size, 1, hr_img.shape[0], hr_img.shape[1], device=device) \
+    init_x = torch.randn(batch_size, 1, 28, 28, device=device) \
       * marginal_prob_std(t)[:, None, None, None]
   else:
     init_x = z
@@ -721,31 +673,21 @@ def ode_sampler(score_model,
 from torchvision.utils import make_grid
 
 
+from torchvision.datasets import MNIST
+import torchvision.transforms as transforms
+
 # =====================
 # Main Workflow
 # =====================
 if __name__ == "__main__":
-
-    # Load data
-    dataset = ImageDataset(
-        low_res_dir='images/low_res_train',
-        high_res_dir='images/medium_res_train'
-    )
+    dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
 
     # Get image dimensions
     data_loader = DataLoader(dataset, batch_size=batch_size) #, num_workers=2)
-
-    # Get first image from dataset
-    lr_img, hr_img = dataset[0]
-    print('lr_img.shape:', lr_img.shape)
-    print('hr_img.shape:', hr_img.shape)
-
-    # Dimensions
-    hr_shape = hr_img.shape     # High resolution shape (x)
-    lr_shape = lr_img.shape     # Low resolution shape (y)W
-    n = hr_img.shape[0] * hr_img.shape[1]
-    m = lr_img.shape[0] * lr_img.shape[1]
-    print("N: ", n, "M: ", m)
+    # Get the first batch of images
+    x, y = next(iter(data_loader))
+    print("x.shape:", x.shape)
+    print("y:", y)
 
     # Train ncsn model
     if task == 'train':
@@ -763,19 +705,19 @@ if __name__ == "__main__":
 
         # Generate measurements
         test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
-        y, P = test_generator.make_measurements(lr_img, hr_img) #lr_dct
+        y, P = test_generator.make_measurements(x, y) #lr_dct
         print("y.shape:", y.shape)
         print("P.shape:", P.shape)
 
         # Evaluate both methods
-        results = reconstruct_and_evaluate(lr_img, P, score_model, hr_img, num_epochs=num_epochs, 
+        results = reconstruct_and_evaluate(y, P, score_model, x, num_epochs=num_epochs, 
                                     num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
 
         # Print metrics
         print("\nEvaluation Results:")
         print(f"NCSN Method - NMSE: {results['score_model']['nmse']:.4f}, Time: {results['score_model']['time']:.2f}s")
         # Visualize
-        plot_results(results, hr_img)
+        plot_results(results, y)
     
     else: # Just generate from noise
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
@@ -794,6 +736,7 @@ if __name__ == "__main__":
                         diffusion_coeff_fn,
                         sample_batch_size,
                         device=device)
+        
         print("end inference time:", time.time() - start_inference_time)
         ## Sample visualization.
         #samples = samples.clamp(0.0, 1.0)
