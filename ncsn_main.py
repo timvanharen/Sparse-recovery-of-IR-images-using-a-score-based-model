@@ -19,7 +19,7 @@ print(f"Using device: {device}")
 USE_NCSN_MODEL = False  # Set to False to use ScoreNet instead
 
 # Global configuration variables
-task = 'generate' #'train' # 'test  # Task name
+task = 'train' #'train' # 'test  # Task name
 batch_size = 32
 num_epochs = 5
 learning_rate = 1e-4
@@ -177,7 +177,7 @@ class DynamicPadCat(nn.Module):
 class ScoreNet(nn.Module):
     """A time-dependent score-based model built upon U-Net architecture."""
 
-    def __init__(self, marginal_prob_std, img_height, img_width, channels=[32, 64, 128, 256], embed_dim=256):
+    def __init__(self, marginal_prob_std, img_height, img_width, channels=[16, 32, 64, 128, 256], embed_dim=256):
         """Initialize a time-dependent score-based network.
 
         Args:
@@ -187,100 +187,49 @@ class ScoreNet(nn.Module):
             embed_dim: The dimensionality of Gaussian random feature embeddings.
         """
         super().__init__()
+        self.channels = channels
+        # Gaussian random feature embedding layer for time
+        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+        nn.Linear(embed_dim, embed_dim))
+        # Encoding layers where the resolution decreases
+        self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
+        self.dense1 = Dense(embed_dim, channels[0])
+        self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
 
-        if img_height == 32 and img_width == 40:
+        self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=4, stride=2, padding=1, bias=False)
+        self.dense2 = Dense(embed_dim, channels[1])
+        self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
 
-            # Gaussian random feature embedding layer for time
-            self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
-            nn.Linear(embed_dim, embed_dim))
-            # Encoding layers where the resolution decreases
-            self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
-            self.dense1 = Dense(embed_dim, channels[0])
-            self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
-            self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=4, stride=2, padding=1, bias=False)
-            self.dense2 = Dense(embed_dim, channels[1])
-            self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
-            self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=(2,4), stride=2, padding=1, bias=False)
-            self.dense3 = Dense(embed_dim, channels[2])
-            self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
-            self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=3, stride=2, padding=0, bias=False)
-            self.dense4 = Dense(embed_dim, channels[3])
-            self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+        self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=4, stride=2, padding=1, bias=False)
+        self.dense3 = Dense(embed_dim, channels[2])
+        self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
 
-            # Decoding layers where the resolution increases
-            self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=0, bias=False)
-            self.dense5 = Dense(embed_dim, channels[2])
-            self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
-            self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=(2,4), stride=2, padding=1, bias=False)
-            self.dense6 = Dense(embed_dim, channels[1])
-            self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
-            self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
-            self.dense7 = Dense(embed_dim, channels[0])
-            self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
-            self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=4, stride=2, padding=1, bias=False)
+        self.dense4 = Dense(embed_dim, channels[3])
+        self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
 
-        elif img_height == 128 and img_width == 160:
-            # Gaussian random feature embedding layer for time
-            self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
-            nn.Linear(embed_dim, embed_dim))
-            # Encoding layers where the resolution decreases
-            self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
-            self.dense1 = Dense(embed_dim, channels[0])
-            self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
-            self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=(2,8), stride=2, padding=1, bias=False)
-            self.dense2 = Dense(embed_dim, channels[1])
-            self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
-            self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=(3,8), stride=2, padding=1, bias=False)
-            self.dense3 = Dense(embed_dim, channels[2])
-            self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
-            self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=3, stride=2, padding=0, bias=False)
-            self.dense4 = Dense(embed_dim, channels[3])
-            self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+        self.conv5 = nn.Conv2d(channels[3], channels[4], kernel_size=2, stride=2, padding=0, bias=False)
+        self.dense5 = Dense(embed_dim, channels[4])
+        self.gnorm5 = nn.GroupNorm(32, num_channels=channels[4])
 
-            # Decoding layers where the resolution increases
-            self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=0, bias=False)
-            self.dense5 = Dense(embed_dim, channels[2])
-            self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
-            self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=(3,8), stride=2, padding=1, bias=False)
-            self.dense6 = Dense(embed_dim, channels[1])
-            self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
-            self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=(2,8), stride=2, padding=1, bias=False)
-            self.dense7 = Dense(embed_dim, channels[0])
-            self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
-            self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
+        # Decoding layers where the resolution increases
+        self.tconv5 = nn.ConvTranspose2d(channels[4], channels[3], kernel_size=2, stride=2, padding=0, bias=False)
 
-        elif img_height == 512 and img_width == 640:
-            # Gaussian random feature embedding layer for time
-            self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
-            nn.Linear(embed_dim, embed_dim))
-            # Encoding layers where the resolution decreases
-            self.conv1 = nn.Conv2d(1, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
-            self.dense1 = Dense(embed_dim, channels[0])
-            self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
-            self.conv2 = nn.Conv2d(channels[0], channels[1], kernel_size=(4,12), stride=4, padding=0, bias=False)
-            self.dense2 = Dense(embed_dim, channels[1])
-            self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
-            self.conv3 = nn.Conv2d(channels[1], channels[2], kernel_size=(2,16), stride=2, padding=1, bias=False)
-            self.dense3 = Dense(embed_dim, channels[2])
-            self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
-            self.conv4 = nn.Conv2d(channels[2], channels[3], kernel_size=3, stride=2, padding=0, bias=False)
-            self.dense4 = Dense(embed_dim, channels[3])
-            self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+        self.dense6 = Dense(embed_dim, channels[3])
+        self.tgnorm5 = nn.GroupNorm(32, num_channels=channels[3])
+        self.tconv4 = nn.ConvTranspose2d(channels[3]*2, channels[2], kernel_size=4, stride=2, padding=1, bias=False)
 
-            # Decoding layers where the resolution increases
-            self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=0, bias=False)
-            self.dense5 = Dense(embed_dim, channels[2])
-            self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
-            self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=(2,16), stride=2, padding=1, bias=False)
-            self.dense6 = Dense(embed_dim, channels[1])
-            self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
-            self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=(4,12), stride=4, padding=0, bias=False)
-            self.dense7 = Dense(embed_dim, channels[0])
-            self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
-            self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
-        else:
-            raise ValueError("Unsupported image size. Supported sizes are (512, 640), (128, 160) and (32x40).")
+        self.dense7 = Dense(embed_dim, channels[2])
+        self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
+        self.tconv3 = nn.ConvTranspose2d(channels[2]*2, channels[1], kernel_size=4, stride=2, padding=1, bias=False)
 
+        self.dense8 = Dense(embed_dim, channels[1])
+        self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
+        self.tconv2 = nn.ConvTranspose2d(channels[1]*2, channels[0], kernel_size=4, stride=2, padding=1, bias=False)
+
+        self.dense9 = Dense(embed_dim, channels[0])
+        self.tgnorm2 = nn.GroupNorm(16, num_channels=channels[0])
+        self.tconv1 = nn.ConvTranspose2d(channels[0]*2, 1, kernel_size=4, stride=2, padding=1)
         # Modify transpose convs for non-square outputs
         self.padcat = DynamicPadCat()
 
@@ -316,6 +265,11 @@ class ScoreNet(nn.Module):
         h4 += self.dense4(embed)
         h4 = self.gnorm4(h4)
         h4 = self.act(h4)
+        h5 = self.conv5(h4)
+
+        h5 += self.dense5(embed)
+        h5 = self.gnorm5(h5)
+        h5 = self.act(h5)
 
         if PRINT_SIZE:
             print("t.shape:", t.shape)
@@ -325,12 +279,27 @@ class ScoreNet(nn.Module):
             print("h2.shape:", h2.shape)
             print("h3.shape:", h3.shape)
             print("h4.shape:", h4.shape)
+            print("h5.shape:", h5.shape)
 
-        h = self.tconv4(h4)
-        if PRINT_SIZE: print("h.shape: self.tconv4(h4)", h.shape)
+        # DeConv 5
+        h = self.tconv5(h5)
+        if PRINT_SIZE: print("h.shape: self.tconv5(h5)", h.shape)
 
-        h += self.dense5(embed)
+        h += self.dense6(embed)
         if PRINT_SIZE:  print("h.shape self.dense5(embed):", h.shape)
+
+        h = self.tgnorm5(h)
+        if PRINT_SIZE:  print("h.shape: self.tgnorm5(h)", h.shape)
+
+        h = self.act(h)
+        if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
+
+        # DeConv 4
+        h = self.tconv4(self.padcat(h, h4))  # Modified
+        if PRINT_SIZE:  print("h.shape: self.tconv4(self.padcat(h, h4))  # Modified", h.shape)
+
+        h += self.dense7(embed)
+        if PRINT_SIZE:  print("h.shape: self.dense6(embed)", h.shape)
 
         h = self.tgnorm4(h)
         if PRINT_SIZE:  print("h.shape: self.tgnorm4(h)", h.shape)
@@ -338,11 +307,12 @@ class ScoreNet(nn.Module):
         h = self.act(h)
         if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
 
+        # DeConv 3
         h = self.tconv3(self.padcat(h, h3))  # Modified
-        if PRINT_SIZE:  print("h.shape: self.tconv3(self.padcat(h, h3))  # Modified", h.shape)
+        if PRINT_SIZE:  print("h.shape: self.tconv3(self.padcat(h, h3))", h.shape)
 
-        h += self.dense6(embed)
-        if PRINT_SIZE:  print("h.shape: self.dense6(embed)", h.shape)
+        h += self.dense8(embed)
+        if PRINT_SIZE:  print("h.shape: self.dense7(embed)", h.shape)
 
         h = self.tgnorm3(h)
         if PRINT_SIZE:  print("h.shape: self.tgnorm3(h)", h.shape)
@@ -350,17 +320,20 @@ class ScoreNet(nn.Module):
         h = self.act(h)
         if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
 
+        # DeConv 2
         h = self.tconv2(self.padcat(h, h2))  # Modified
         if PRINT_SIZE:  print("h.shape: self.tconv2(self.padcat(h, h2))", h.shape)
 
-        h += self.dense7(embed)
-        if PRINT_SIZE:  print("h.shape: self.dense7(embed)", h.shape)
+        h += self.dense9(embed)
+        if PRINT_SIZE:  print("h.shape: self.dense8(embed)", h.shape)
+
         h = self.tgnorm2(h)
         if PRINT_SIZE:  print("h.shape: self.tgnorm2(h)", h.shape)
 
         h = self.act(h)
         if PRINT_SIZE:  print("h.shape: self.act(h)", h.shape)
 
+        # DeConv 1
         h = self.tconv1(self.padcat(h, h1))  # Modified
         if PRINT_SIZE:  print("h.shape: self.tconv1(self.padcat(h, h1))  # Modified", h.shape)
 
@@ -735,7 +708,7 @@ def show_resized_dct_image(img_dct, title, wait=False):
         plt.show()
 
 def train_score_model():
-    score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1], channels=[32, 64, 128, 256], embed_dim=256))
+    score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1]))
     score_model = score_model.to(device)
     optimizer = optim.Adam(score_model.parameters(), lr=learning_rate)
 
@@ -747,6 +720,7 @@ def train_score_model():
         for _, hr_img in data_loader:
             hr_img = hr_img.to(device)
             hr_img = hr_img.view(-1, 1, hr_img.shape[1], hr_img.shape[2]) # Reshape to (batch_size, channels, height, width)
+            
             loss = loss_fn(score_model, hr_img, marginal_prob_std_fn)
             optimizer.zero_grad()
             loss.backward()
@@ -840,7 +814,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images/low_res_train',
-        high_res_dir='images/low_res_train'
+        high_res_dir='images/high_res_train'
     )
 
     # Get image dimensions
@@ -874,7 +848,7 @@ if __name__ == "__main__":
         if USE_NCSN_MODEL:
             score_model = NCSN(dataset.img_hr_height, dataset.img_hr_width).to(device)
         else:
-            score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1], channels=[32, 64, 128, 256], embed_dim=256))
+            score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1]))
             score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('score_model.pth'))
         score_model.eval()
