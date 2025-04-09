@@ -743,7 +743,7 @@ def show_resized_dct_image(img_dct, title, wait=False):
         plt.show()
 
 def train_score_model():
-    score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1]))
+    score_model = torch.nn.DataParallel(ScoreNet_128_160(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1]))
     score_model = score_model.to(device)
     optimizer = optim.Adam(score_model.parameters(), lr=learning_rate)
 
@@ -851,7 +851,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images/low_res_train',
-        high_res_dir='images/high_res_train'
+        high_res_dir='images/medium_res_train'
     )
 
     # Get image dimensions
@@ -875,10 +875,10 @@ if __name__ == "__main__":
         if USE_NCSN_MODEL:
             score_model = train_ncsn(dataset, batch_size=batch_size, lr=learning_rate, num_epochs=num_epochs, 
                                     num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
-            torch.save(score_model.state_dict(), 'ncsn_model.pth')
+            torch.save(score_model.state_dict(), 'checkpoints/ncsn_model.pth')
         else:
             score_model = train_score_model()
-            torch.save(score_model.state_dict(), 'score_model.pth')
+            torch.save(score_model.state_dict(), 'checkpoints/score_model.pth')
 
     else: # Load pre-trained model
         print("Loading pre-trained score model...")
@@ -887,7 +887,7 @@ if __name__ == "__main__":
         else:
             score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn, img_height=hr_shape[0], img_width=hr_shape[1]))
             score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('score_model.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/score_model.pth'))
         score_model.eval()
     
         if USE_NCSN_MODEL:
@@ -908,12 +908,9 @@ if __name__ == "__main__":
             # Visualize
             plot_results(results, hr_img)
         else:
-            # ## Load the pre-trained checkpoint from disk.
-            # device = 'cuda' #@param ['cuda', 'cpu'] {'type':'string'}
-            # ckpt = torch.load('/checkpoints/ckpt.pth', map_location=device)
-            # score_model.load_state_dict(ckpt)
-
-            sample_batch_size = 64 #@param {'type':'integer'}
+            start_inference_time = time.time()
+            
+            sample_batch_size = 4 #@param {'type':'integer'}
             sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
 
             ## Generate samples using the specified sampler.
@@ -922,7 +919,7 @@ if __name__ == "__main__":
                             diffusion_coeff_fn,
                             sample_batch_size,
                             device=device)
-
+            print("end inference time:", time.time() - start_inference_time)
             ## Sample visualization.
             #samples = samples.clamp(0.0, 1.0)
             import matplotlib.pyplot as plt
@@ -931,5 +928,6 @@ if __name__ == "__main__":
             plt.figure(figsize=(6,6))
             plt.axis('off')
             plt.imshow(sample_grid.permute(1, 2, 0).cpu()) #, vmin=0., vmax=1.)
+            plt.savefig("batch generated.jpg")
             plt.show()
-            plt.savefig("batch generated")
+            
