@@ -18,8 +18,8 @@ print(f"Using device: {device}")
 
 # Global configuration variables
 task = 'train' #'train' # 'test  # Task name
-batch_size = 256
-num_epochs = 5
+batch_size = 32
+num_epochs = 30
 learning_rate = 1e-4
 num_scales = num_epochs
 sigma_min = 0.01
@@ -197,15 +197,7 @@ class ScoreNet(nn.Module):
     h4 += self.dense4(embed)
     h4 = self.gnorm4(h4)
     h4 = self.act(h4)
-    if PRINT_SIZE:
-        print("t.shape:", t.shape)
-        print("x.shape:", x.shape)  
-        print("embed.shape:", embed.shape)
-        print("h1.shape:", h1.shape)
-        print("h2.shape:", h2.shape)
-        print("h3.shape:", h3.shape)
-        print("h4.shape:", h4.shape)
-        
+
     # Decoding path
     h = self.tconv4(h4)
     ## Skip connection from the encoding path
@@ -225,7 +217,7 @@ class ScoreNet(nn.Module):
     # Normalize output
     h = h / self.marginal_prob_std(t)[:, None, None, None]
     return h
-  
+    
 class ScoreNet_poepje(nn.Module):
     """A time-dependent score-based model built upon U-Net architecture."""
 
@@ -317,6 +309,7 @@ class ScoreNet_poepje(nn.Module):
         h4 += self.dense4(embed)
         h4 = self.gnorm4(h4)
         h4 = self.act(h4)
+        PRINT_SIZE = False
         if PRINT_SIZE:
             print("t.shape:", t.shape)
             print("x.shape:", x.shape)  
@@ -392,7 +385,6 @@ class ScoreNet_poepje(nn.Module):
 
         return h / self.marginal_prob_std(t)[:, None, None, None]
 
-
 def marginal_prob_std(t, sigma):
     """Compute the mean and standard deviation of $p_{0t}(x(t) | x(0))$.
 
@@ -418,22 +410,22 @@ def diffusion_coeff(t, sigma):
     """
     return torch.tensor(sigma**t, device=device)
 
-sigma_noise =  25 #@param {'type':'number'}
-marginal_prob_std_fn = functools.partial(marginal_prob_std, sigma=sigma_noise)
-diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma_noise)
+sigma =  25.0 #@param {'type':'number'}
+marginal_prob_std_fn = functools.partial(marginal_prob_std, sigma=sigma)
+diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma)
 
 # This fuction generated 10000 times the marginal prob standard and then plots the distribution
 def plot_marginal_prob_std():
     t = torch.linspace(0, 1, 10000)
-    std = marginal_prob_std(t, sigma_noise).cpu().numpy()
-    #std = std/np.sqrt(sigma_noise) - np.ones(std.shape)/2
+    std = marginal_prob_std(t, sigma).cpu().numpy()
+    #std = std/np.sqrt(sigma) - np.ones(std.shape)/2
     plt.hist(std, bins=100, density=True)
-    plt.title("Marginal Probability Standard Deviation, sigma_noise={}".format(sigma_noise))
+    plt.title("Marginal Probability Standard Deviation, sigma={}".format(sigma))
     plt.xlabel("Standard Deviation")
     plt.ylabel("Density")
     plt.show()
 
-def loss_fn(model, x, marginal_prob_std, eps=1e-8, show_image=False):
+def loss_fn(model, x, marginal_prob_std, eps=1e-5, show_image=False):
     """The loss function for training score-based generative models.
 
     Args:
@@ -694,13 +686,13 @@ def train_score_model():
             batch_idx += 1
             #print("batch_idx:", batch_idx)
             #break
-            if batch_idx % 10 == 0:
-                print('Epoch:', epoch, '| Batch:', batch_idx, '| Loss: {:5f}'.format(loss.item()))\
+            # if batch_idx % 10 == 0:
+            #     print('Epoch:', epoch, '| Batch:', batch_idx, '| Loss: {:5f}'.format(loss.item()))\
         
         print('Epoch:', epoch, '/', num_epochs, '| Average Loss: {:5f}'.format(avg_loss / num_items), '| Time:', time.time() - start_epoch_time)
         
         # Update the checkpoint after each epoch of training.
-        torch.save(score_model.state_dict(), 'checkpoints/ckpt.pth')
+        torch.save(score_model.state_dict(), 'checkpoints/score_model.pth')
     return score_model
 from scipy import integrate
 
@@ -738,25 +730,31 @@ def ode_sampler(score_model,
       * marginal_prob_std(t)[:, None, None, None]
   else:
     init_x = z
-    
-  shape = init_x.shape
 
+  shape = init_x.shape
+  # print('init_x.shape:', init_x.shape)
   def score_eval_wrapper(sample, time_steps):
     """A wrapper of the score-based model for use by the ODE solver."""
     sample = torch.tensor(sample, device=device, dtype=torch.float32).reshape(shape)
-    time_steps = torch.tensor(time_steps, device=device, dtype=torch.float32).reshape((sample.shape[0], ))    
-    with torch.no_grad():    
-      score = score_model(sample, time_steps)
+    # print('sample.shape:', sample.shape)
+    time_steps = torch.tensor(time_steps, device=device, dtype=torch.float32).reshape(batch_size)# .reshape(sample.shape[0], sample.shape[1])
+    # print('time_steps.shape:', time_steps.shape)
+    with torch.no_grad():
+      score = score_model(sample, time_steps) # HERE
+    # print('score.shape:', score.shape)
     return score.cpu().numpy().reshape((-1,)).astype(np.float64)
-  
-  def ode_func(t, x):        
+
+  def ode_func(t, x):
     """The ODE function for use by the ODE solver."""
-    time_steps = np.ones((shape[0],)) * t    
+    time_steps = np.ones((shape[0],)) * t
     g = diffusion_coeff(torch.tensor(t)).cpu().numpy()
+    # print("score_eval_wrapper(x, time_steps).shape:", score_eval_wrapper(x, time_steps).shape)
     return  -0.5 * (g**2) * score_eval_wrapper(x, time_steps)
-  
+
   # Run the black-box ODE solver.
-  res = integrate.solve_ivp(ode_func, (1., eps), init_x.reshape(-1).cpu().numpy(), rtol=rtol, atol=atol, method='RK45')  
+  # print("init_x.flatten().cpu().numpy().shape:", init_x.flatten().cpu().numpy().shape)
+  # print("init_x.reshape(-1).cpu().numpy().shape:", init_x.reshape(-1).cpu().numpy().shape)
+  res = integrate.solve_ivp(ode_func, (1., eps), init_x.flatten().cpu().numpy(), rtol=rtol, atol=atol, method='RK45')
   print(f"Number of function evaluations: {res.nfev}")
   x = torch.tensor(res.y[:, -1], device=device).reshape(shape)
 
@@ -775,7 +773,7 @@ if __name__ == "__main__":
     dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
 
     # Get image dimensions
-    data_loader = DataLoader(dataset, batch_size=batch_size) #, num_workers=2)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     # Get the first batch of images
     x, y = next(iter(data_loader))
     print("x.shape:", x.shape)
@@ -819,7 +817,7 @@ if __name__ == "__main__":
 
         start_inference_time = time.time()
 
-        sample_batch_size = 4 #@param {'type':'integer'}
+        sample_batch_size = 64 #@param {'type':'integer'}
         sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
 
         ## Generate samples using the specified sampler.
@@ -831,7 +829,7 @@ if __name__ == "__main__":
         
         print("end inference time:", time.time() - start_inference_time)
         ## Sample visualization.
-        #samples = samples.clamp(0.0, 1.0)
+        samples = samples.clamp(0.0, 1.0)
         import matplotlib.pyplot as plt
         sample_grid = make_grid(samples, nrow=int(np.sqrt(sample_batch_size)))
 
