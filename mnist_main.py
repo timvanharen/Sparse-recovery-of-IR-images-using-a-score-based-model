@@ -477,104 +477,66 @@ class NoiseSchedule:
         return self.sigmas[idx]
 
 # =====================
-# Training monitoring functions
-# =====================
-
-def visualize_progress(model, test_sample, epoch):
-    model.eval()
-    with torch.no_grad():
-        # Create noisy versions at different σ levels
-        noise_levels = torch.linspace(0.1, 1.0, 5).to(device)
-        noisy_samples = test_sample + torch.randn_like(test_sample) * noise_levels.view(-1, 1, 1, 1)
-        
-        # Predict scores
-        scores = model(noisy_samples, noise_levels)
-        
-        # Denoise using score
-        denoised = noisy_samples - scores * noise_levels.view(-1, 1, 1, 1)
-        
-    # Plot results
-    plt.figure(figsize=(15, 3))
-    for i in range(5):
-        plt.subplot(1, 5, i+1)
-        plt.imshow(denoised[i][0].cpu().numpy(), cmap='gray')
-        plt.title(f"sigma={noise_levels[i]:.2f}")
-    plt.suptitle(f"Epoch {epoch} Denoising Results")
-    plt.show()
-    model.train()
-
-def calculate_metrics(pred, target, sigma):
-    # 1. Relative Error
-    rel_error = torch.mean(torch.abs(pred - target) / (torch.abs(target).mean() + 1e-5))
-    
-    # 2. Angle Alignment (cosine similarity)
-    cosine_sim = F.cosine_similarity(pred.flatten(1), target.flatten(1))
-    
-    return {
-        'loss': torch.mean((pred - target)**2 / sigma**2),
-        'rel_error': rel_error,
-        'cosine_sim': cosine_sim.mean()
-    }
-
-def plot_gradients(model):
-    gradients = []
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            gradients.append(param.grad.abs().mean().item())
-    
-    plt.figure(figsize=(10, 4))
-    plt.plot(gradients, 'o-')
-    plt.yscale('log')
-    plt.title("Gradient Magnitudes")
-    plt.xlabel("Parameter Index")
-    plt.ylabel("Gradient (log scale)")
-    plt.show()
-
-# =====================
 # Annealed Langevin Dynamics
 # =====================
-def annealed_langevin_dynamics(y, P, model, img_shape, num_epochs, num_scales, sigma_min, sigma_max, anneal_power, steps_per_noise=10):
+def annealed_langevin_dynamics(y, D_heigth, D_width, model, x, img_shape, num_epochs, num_scales, sigma_min, sigma_max, anneal_power, steps_per_noise=3):
     noise_schedule = NoiseSchedule(num_scales=num_epochs, sigma_min=sigma_min, sigma_max=sigma_max)
     current_h = torch.rand(1, 1, *img_shape, device=device, requires_grad=True)
     
     # Store reconstruction process
     reconstruction_process = []
-    
+
+    # Annealing hyper parameter for Langevin dynamics
+    alpha = 0.1 
+    beta = 0.1
+    r = 0.9
+    # COnvert to tesnor and to device
+    alpha = torch.tensor(alpha, dtype=torch.float32, device=device)
+    beta = torch.tensor(beta, dtype=torch.float32, device=device)
+    r = torch.tensor(r, dtype=torch.float32, device=device)
+
+    i = 0 #step counter
     for sigma in reversed(noise_schedule.sigmas):
         # Step size depends on noise level
-        step_size = 1/steps_per_noise * sigma**2 #* 0.01  # Adjust this value as needed
+        step_size = alpha * r**i
         
         for step in range(steps_per_noise):
             
             # Data fidelity term
-            h_flat = current_h.view(-1) # Flatten the current estimate from ([1, 1, 128, 160]) to ([20480])
+            #h_flat = current_h.view(-1) # Flatten the current estimate from ([1, 1, 128, 160]) to ([20480])
             # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"h_flat Step {step}", wait=True)
 
-            residual = y - P @ h_flat
+            residual = y.flatten() - (D_height @ current_h[0, 0] @ D_width.T).view(-1) # Flatten the current estimate from ([1, 1, 128, 160]) to ([20480])
+            # Print shapes
+            # print("y.shape:", y.shape)
+            # print("D_height.shape:", D_heigth.shape)
+            # print("D_width.shape:", D_width.shape)
+            # print("current_h.shape:", current_h.shape)
+            # print("residual.shape:", residual.shape)
+            # #input("Press Enter to continue...")
 
-            grad_likelihood = residual @ P
+            grad_likelihood = D_height.T @ residual.view(14, 14) @ D_width
+
+            #print("grad_likelihood.shape:", grad_likelihood.shape)
             
             # Prior term
             with torch.no_grad():
                 score = model(current_h, sigma * torch.ones(1, device=device))
             
             # Langevin update
-            noise_term = torch.sqrt(2 * step_size) * torch.randn_like(current_h)
+            noise_term = torch.sqrt(2*beta * step_size) * sigma**2 * torch.randn_like(current_h)
             # show_resized_dct_image(noise_term[0, 0].detach().cpu().numpy(), f"noise_term Step {step}", wait=True)
-            # # print("noise_term.shape:", noise_term.shape)
+            # print("noise_term.shape:", noise_term.shape)
             
-            current_h = current_h + step_size * (score + 0.1*grad_likelihood.view_as(current_h)) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
-            # show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"current_h Step {step}", wait=True)
-
+            current_h = current_h + step_size * (score + grad_likelihood.view_as(current_h)) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
+            #show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"current_h Step {step}", wait=True)
+        i += 1
         reconstruction_process.append(current_h.detach().cpu().numpy())
-        #show_resized_dct_image(current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
+        show_reconstructed_image(x.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
         print("current_h.shape:", current_h.shape)
     
     # Final reconstruction
     reconstructed_dct = current_h.squeeze().detach().cpu().numpy()
-    cv2.imshow('Reconstructed DCT', reconstructed_dct)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
     reconstructed_img = cv2.idct(reconstructed_dct)
     return reconstructed_img, reconstruction_process
 
@@ -592,11 +554,11 @@ def psnr(original, reconstructed):
     mse = np.mean((original - reconstructed)**2)
     return 20 * np.log10(1.0 / np.sqrt(mse + 1e-10))
 
-def reconstruct_and_evaluate(y, P, model, x, num_epochs, num_scales, sigma_min, sigma_max, anneal_power):
+def reconstruct_and_evaluate(y, D_heigth, D_width, model, x, num_epochs, num_scales, sigma_min, sigma_max, anneal_power):
     """Evaluate reconstruction method"""
     results = {}
     start = time.time()
-    ncsn_recon, process = annealed_langevin_dynamics(y, P, model, x.shape, num_epochs=num_epochs, 
+    ncsn_recon, process = annealed_langevin_dynamics(y, D_heigth, D_width, model, x, x.shape, num_epochs=num_epochs, 
                                 num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
     results['score_model'] = {
         'time': time.time() - start,
@@ -637,29 +599,29 @@ def plot_reconstruction_process(process):
         plt.imshow(cv2.idct(img.squeeze()), cmap='gray')
         plt.title(f"Step {i*20}")
         plt.axis('off')
+
     plt.suptitle("Reconstruction Process")
     plt.tight_layout()
     plt.savefig('reconstruction_process.jpg', dpi=300)
     plt.show()
 
-def show_resized_dct_image(img_dct, title, wait=False):
+def show_reconstructed_image(x, y_recon, title, wait=False):
     # let's upscale the image using new  width and height
-    image = cv2.idct(img_dct)
     up_width = 600
-    up_height = 400
+    up_height = 600
     up_points = (up_width, up_height)
-    resized_up = cv2.resize(image, up_points, interpolation= cv2.INTER_LINEAR)
-    resized_up_DCT = cv2.resize(img_dct, up_points, interpolation= cv2.INTER_LINEAR)
+    resized_up_x = cv2.resize(x, up_points, interpolation= cv2.INTER_LINEAR)
+    resized_up_recon = cv2.resize(y_recon, up_points, interpolation= cv2.INTER_LINEAR)
 
     #resized_up_DCT = np.clip(resized_up_DCT, 0, 1)
 
     plt.subplot(1, 2, 1)
-    plt.imshow(resized_up, cmap='gray', norm=None)
-    plt.title(title)
+    plt.imshow(resized_up_x, cmap='gray', norm=None)
+    plt.title("Original Image")
     plt.subplot(1, 2, 2)
-    plt.imshow(resized_up_DCT, cmap='gray', norm=None)
-    plt.title(title + ' DCT')
-    plt.savefig('resized_image_and_dct.jpg', dpi=300)
+    plt.imshow(resized_up_recon, cmap='gray', norm=None)
+    plt.title("reconstruction in progress")
+    plt.savefig('reconstruction.jpg', dpi=300)
     if wait:
         plt.show()
 
@@ -696,7 +658,6 @@ def train_score_model():
     return score_model
 from scipy import integrate
 
-# TODO: Clean up the code and remove unnecessary comments
 ## The error tolerance for the black-box ODE solver
 error_tolerance = 1e-5 #@param {'type': 'number'}
 def ode_sampler(score_model,
@@ -760,15 +721,53 @@ def ode_sampler(score_model,
 
   return x
 
-from torchvision.utils import make_grid
+from scipy.sparse import diags
 
+def create_binomial_filter_1d(k=2):
+    """Create 1D binomial filter coefficients"""
+    # Simple binomial filter [1,2,1]/4 for k=2
+    # For larger k, use coefficients from Pascal's triangle
+    coeffs = np.array([1, 2, 1])/4
+    return coeffs
 
-from torchvision.datasets import MNIST
-import torchvision.transforms as transforms
+def create_filter_matrix(N, filter_coeffs, mode='reflect'):
+    """Create sparse filter matrix"""
+    half_len = len(filter_coeffs) // 2
+    diagonals = []
+    offsets = []
+    
+    for i in range(-half_len, half_len+1):
+        diagonals.append(np.ones(N-abs(i)))
+        offsets.append(i)
+    
+    F = diags(diagonals, offsets, shape=(N, N)).toarray()
+    # Apply filter coefficients
+    for i, offset in enumerate(offsets):
+        F[F == (i+1)] = filter_coeffs[i]
+    
+    return F
+
+def create_decimation_matrix(N, M, factor):
+    """Create decimation matrix"""
+    S = np.zeros((M, N))
+    for i in range(M):
+        S[i, i*factor] = 1
+    return S
+
+def create_downsample_matrix(N, factor):
+    """Combine filter and decimation"""
+    filter_coeffs = create_binomial_filter_1d()
+    F = create_filter_matrix(N, filter_coeffs)
+    M = N // factor
+    S = create_decimation_matrix(N, M, factor)
+    return S @ F
 
 # =====================
 # Main Workflow
 # =====================
+from torchvision.utils import make_grid
+from torchvision.datasets import MNIST
+import torchvision.transforms as transforms
 if __name__ == "__main__":
     dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
 
@@ -777,7 +776,7 @@ if __name__ == "__main__":
     # Get the first batch of images
     x, y = next(iter(data_loader))
     print("x.shape:", x.shape)
-    print("y:", y)
+    print("y.shape:", y.shape)
 
     # Train ncsn model
     if task == 'train':
@@ -793,14 +792,31 @@ if __name__ == "__main__":
         score_model.load_state_dict(torch.load('checkpoints/score_model.pth'))
         score_model.eval()
 
-        # Generate measurements
-        test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
-        y, P = test_generator.make_measurements(x, y) #lr_dct
-        print("y.shape:", y.shape)
-        print("P.shape:", P.shape)
+        # Generate measurements by downscaling the image in x to y
+        print("x.shape:", x.shape)
+        y_meas = cv2.resize(x[0, 0].cpu().numpy(), (x.shape[2]//2, x.shape[3]//2), interpolation=cv2.INTER_LINEAR)
+        print("y_meas.shape:", y_meas.shape)
+        y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        y_meas = y_meas.flatten().to(device)  # Flatten and move to device
+        print("y_meas.shape:", y_meas.shape)
+
+        # Create downsample matrices for the images
+        # For 28×28 → 14×14
+        D_height = create_downsample_matrix(28, 2)  # 32×128
+        D_width = create_downsample_matrix(28, 2)   # 40×160
+
+        y_down = D_height @ x[0, 0].cpu().numpy() @ D_width.T
+        y_down = torch.tensor(y_down, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        D_height = torch.tensor(D_height, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        D_width = torch.tensor(D_width, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+
+        # test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
+        # y, P = test_generator.make_measurements(x, y) #lr_dct
+        # print("y.shape:", y.shape)
+        # print("P.shape:", P.shape)
 
         # Evaluate both methods
-        results = reconstruct_and_evaluate(y, P, score_model, x, num_epochs=num_epochs, 
+        results = reconstruct_and_evaluate(y_down, D_height, D_width, score_model, x[0,0], num_epochs=num_epochs, 
                                     num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
 
         # Print metrics
