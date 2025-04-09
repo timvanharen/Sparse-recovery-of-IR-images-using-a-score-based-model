@@ -20,7 +20,7 @@ USE_NCSN_MODEL = False  # Set to False to use ScoreNet instead
 
 # Global configuration variables
 task = 'train' #'train' # 'test  # Task name
-batch_size = 32
+batch_size = 128
 num_epochs = 5
 learning_rate = 1e-4
 num_scales = num_epochs
@@ -47,6 +47,10 @@ MR_train_data_output_dir = Path("./images/medium_res_train")
 MR_test_data_output_dir = Path("./images/medium_res_test")
 LR_train_data_output_dir = Path("./images/low_res_train")
 LR_test_data_output_dir = Path("./images/low_res_test")
+
+# Create checkpoint directory if it doesn't exist
+if not os.path.exists('checkpoints'):
+    os.makedirs('checkpoints')
 
 # TODO:
 # - Where is the gradient of the log likelihood and how can we test that it works?
@@ -350,7 +354,7 @@ def marginal_prob_std(t, sigma):
         The standard deviation.
     """
     t = torch.tensor(t, device=device)
-    return torch.sqrt((sigma**(2 * t) - 1.) / 2. / np.log(sigma))
+    return (torch.sqrt((sigma**(2 * t) - 1.) / 2. / np.log(sigma))/np.sqrt(sigma) - 1./2.) * np.sqrt(sigma) # TODO: Check this formula
 
 def diffusion_coeff(t, sigma):
     """Compute the diffusion coefficient of our SDE.
@@ -364,11 +368,22 @@ def diffusion_coeff(t, sigma):
     """
     return torch.tensor(sigma**t, device=device)
 
-sigma =  25.0#@param {'type':'number'}
-marginal_prob_std_fn = functools.partial(marginal_prob_std, sigma=sigma)
-diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma)
+sigma_noise =  2 #@param {'type':'number'}
+marginal_prob_std_fn = functools.partial(marginal_prob_std, sigma=sigma_noise)
+diffusion_coeff_fn = functools.partial(diffusion_coeff, sigma=sigma_noise)
 
-def loss_fn(model, x, marginal_prob_std, eps=1e-5):
+# This fuction generated 10000 times the marginal prob standard and then plots the distribution
+def plot_marginal_prob_std():
+    t = torch.linspace(0, 1, 10000)
+    std = marginal_prob_std(t, sigma_noise).cpu().numpy()
+    std = std/np.sqrt(sigma_noise) - np.ones(std.shape)/2
+    plt.hist(std, bins=100, density=True)
+    plt.title("Marginal Probability Standard Deviation, sigma_noise={}".format(sigma_noise))
+    plt.xlabel("Standard Deviation")
+    plt.ylabel("Density")
+    plt.show()
+
+def loss_fn(model, x, marginal_prob_std, eps=1e-8, show_image=False):
     """The loss function for training score-based generative models.
 
     Args:
@@ -379,10 +394,30 @@ def loss_fn(model, x, marginal_prob_std, eps=1e-5):
             the perturbation kernel.
         eps: A tolerance value for numerical stability.
     """
+    #plot_marginal_prob_std()
     random_t = torch.rand(x.shape[0], device=x.device) * (1. - eps) + eps
-    z = torch.randn_like(x)
+    z = torch.randn_like(x, )
     std = marginal_prob_std(random_t)
-    perturbed_x = x + z * std[:, None, None, None]
+    
+    z = z * std[:, None, None, None]  # Broadcasting to match x's shape
+    perturbed_x = x + z
+    
+    if show_image:
+        # print min max of image values
+        print("x.min()", x[0,0].min(), "x.max()", x[0,0].max())
+        # Also print min max of noise
+        print("z.min()", z[0,0].min(), "z.max()", z[0,0].max())
+        print("random_t.shape:", random_t)
+        plt.imshow(x[0, 0].cpu().numpy(), cmap='gray')
+        plt.title(f"Clean Image before pertubation")
+        plt.axis('off')
+        plt.show()
+        # Show the first pertubed image in the set
+        plt.imshow(perturbed_x[0, 0].cpu().numpy(), cmap='gray')
+        plt.title(f"Perturbed Image with noise {std[0]:.2f}")
+        plt.axis('off')
+        plt.show()
+
     score = model(perturbed_x, random_t)
     loss = torch.mean(torch.sum((score * std[:, None, None, None] + z)**2, dim=(1,2,3)))
     return loss
@@ -721,13 +756,15 @@ def train_score_model():
             hr_img = hr_img.to(device)
             hr_img = hr_img.view(-1, 1, hr_img.shape[1], hr_img.shape[2]) # Reshape to (batch_size, channels, height, width)
             
-            loss = loss_fn(score_model, hr_img, marginal_prob_std_fn)
+            loss = loss_fn(score_model, hr_img, marginal_prob_std_fn, show_image=False)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             avg_loss += loss.item() * hr_img.shape[0]
             num_items += hr_img.shape[0]
             batch_idx += 1
+            #print("batch_idx:", batch_idx)
+            #break
             if batch_idx % 10 == 0:
                 print('Epoch:', epoch, '| Batch:', batch_idx, '| Loss: {:5f}'.format(loss.item()))\
         
@@ -853,46 +890,46 @@ if __name__ == "__main__":
         score_model.load_state_dict(torch.load('score_model.pth'))
         score_model.eval()
     
-    if USE_NCSN_MODEL:
-        # Generate measurements
-        test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
-        y, P = test_generator.make_measurements(lr_img, hr_img) #lr_dct
-        print("y.shape:", y.shape)
-        print("P.shape:", P.shape)
+        if USE_NCSN_MODEL:
+            # Generate measurements
+            test_generator = CSImageGenerator(dataset, M=num_measurements, snr_db=snr_db)
+            y, P = test_generator.make_measurements(lr_img, hr_img) #lr_dct
+            print("y.shape:", y.shape)
+            print("P.shape:", P.shape)
 
-        # Evaluate both methods
-        results = reconstruct_and_evaluate(y, P, score_model, hr_img, num_epochs=num_epochs, 
-                                    num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
+            # Evaluate both methods
+            results = reconstruct_and_evaluate(y, P, score_model, hr_img, num_epochs=num_epochs, 
+                                        num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max, anneal_power=anneal_power)
 
-        # Print metrics
-        print("\nEvaluation Results:")
-        print(f"NCSN Method - NMSE: {results['ncsn']['nmse']:.4f}, Time: {results['ncsn']['time']:.2f}s")
-        
-        # Visualize
-        plot_results(results, hr_img)
-    else:
-        # ## Load the pre-trained checkpoint from disk.
-        # device = 'cuda' #@param ['cuda', 'cpu'] {'type':'string'}
-        # ckpt = torch.load('/checkpoints/ckpt.pth', map_location=device)
-        # score_model.load_state_dict(ckpt)
+            # Print metrics
+            print("\nEvaluation Results:")
+            print(f"NCSN Method - NMSE: {results['ncsn']['nmse']:.4f}, Time: {results['ncsn']['time']:.2f}s")
+            
+            # Visualize
+            plot_results(results, hr_img)
+        else:
+            # ## Load the pre-trained checkpoint from disk.
+            # device = 'cuda' #@param ['cuda', 'cpu'] {'type':'string'}
+            # ckpt = torch.load('/checkpoints/ckpt.pth', map_location=device)
+            # score_model.load_state_dict(ckpt)
 
-        sample_batch_size = 64 #@param {'type':'integer'}
-        sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
+            sample_batch_size = 64 #@param {'type':'integer'}
+            sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
 
-        ## Generate samples using the specified sampler.
-        samples = sampler(score_model,
-                        marginal_prob_std_fn,
-                        diffusion_coeff_fn,
-                        sample_batch_size,
-                        device=device)
+            ## Generate samples using the specified sampler.
+            samples = sampler(score_model,
+                            marginal_prob_std_fn,
+                            diffusion_coeff_fn,
+                            sample_batch_size,
+                            device=device)
 
-        ## Sample visualization.
-        #samples = samples.clamp(0.0, 1.0)
-        import matplotlib.pyplot as plt
-        sample_grid = make_grid(samples, nrow=int(np.sqrt(sample_batch_size)))
+            ## Sample visualization.
+            #samples = samples.clamp(0.0, 1.0)
+            import matplotlib.pyplot as plt
+            sample_grid = make_grid(samples, nrow=int(np.sqrt(sample_batch_size)))
 
-        plt.figure(figsize=(6,6))
-        plt.axis('off')
-        plt.imshow(sample_grid.permute(1, 2, 0).cpu()) #, vmin=0., vmax=1.)
-        plt.show()
-        plt.savefig("batch generated")
+            plt.figure(figsize=(6,6))
+            plt.axis('off')
+            plt.imshow(sample_grid.permute(1, 2, 0).cpu()) #, vmin=0., vmax=1.)
+            plt.show()
+            plt.savefig("batch generated")
