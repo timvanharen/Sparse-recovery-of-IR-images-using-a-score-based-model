@@ -3,15 +3,17 @@ import cv2
 import matplotlib.pyplot as plt
 from sklearn.linear_model import orthogonal_mp
 from scipy.fftpack import dct, idct
+from pathlib import Path
+import time
 
 def dct2d_dict(block_size):
     """Build DCT dictionary for given block size"""
-    P = block_size
-    n = P * P
+    P = block_size[0]
+    n = block_size[0] * block_size[1]
     D = []
-    for i in range(P):
-        for j in range(P):
-            basis = np.zeros((P, P))
+    for i in range(block_size[0]):
+        for j in range(block_size[1]):
+            basis = np.zeros((block_size[0], block_size[1]))
             basis[i, j] = 1.0
             dct_basis = dct(dct(basis.T, norm='ortho').T, norm='ortho')
             D.append(dct_basis.flatten())
@@ -20,38 +22,42 @@ def dct2d_dict(block_size):
 
 def compressed_sensing_block_reconstruct(y, Phi, D, k):
     A = Phi @ D  # measurement matrix
-    x_hat = orthogonal_mp(A, y, n_nonzero_coefs=k)  # sparse code
+    start_time = time.time()
+    x_hat, n_iter = orthogonal_mp(A, y, n_nonzero_coefs=k, return_n_iter=True)  # sparse code
+    print(f"OMP iterations: {n_iter}, time: {time.time() - start_time:.4f} seconds")
     recon_block = D @ x_hat
     return recon_block
 
 def block_process_cs(img, block_size, m, k, seed=42):
     np.random.seed(seed)
     h, w = img.shape
-    n = block_size * block_size
+    n = block_size[0] * block_size[1]
     D = dct2d_dict(block_size)
+    print("D shape", D.shape)
     recon = np.zeros_like(img, dtype=np.float32)
 
-    for i in range(0, h, block_size):
-        for j in range(0, w, block_size):
-            block = img[i:i+block_size, j:j+block_size]
-            if block.shape != (block_size, block_size):
+    for i in range(0, h, block_size[0]):
+        for j in range(0, w, block_size[1]):
+            block = img[i:i+block_size[0], j:j+block_size[1]]
+            if block.shape != (block_size[0], block_size[1]):
                 continue
-
+            
             x = block.flatten().astype(np.float32)
 
-            # Generate measurement matrix Φ: shape (m, n)
+            # Generate measurement matrix: shape (m, n)
             Phi = np.random.randn(m, n)
             Phi /= np.linalg.norm(Phi, axis=1, keepdims=True)  # normalize rows
 
             # Simulate compressed measurement y = Φx
             x_dct = D.T @ x  # sparse representation
-            y = Phi @ D @ x_dct
+
+            y = Phi @ x #@ D @ x_dct
 
             # Reconstruct
             recon_block = compressed_sensing_block_reconstruct(y, Phi, D, k)
-            recon_block = recon_block.reshape((block_size, block_size))
+            recon_block = recon_block.reshape((block_size[0], block_size[1]))
 
-            recon[i:i+block_size, j:j+block_size] = recon_block
+            recon[i:i+block_size[0], j:j+block_size[1]] = recon_block
 
     return np.clip(recon, 0, 255).astype(np.uint8)
 
@@ -67,17 +73,38 @@ def show_images(imgs, titles):
 
 # --- Main ---
 
+start_time = time.time()
+print("Starting compressed sensing reconstruction...")
 # Load original image
-original = cv2.imread('images/high_res_train/high_res_train_0.jpg', cv2.IMREAD_GRAYSCALE)
+image_path = Path('medium_res_train_0.jpg')
+original = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")
 
-block_size = 16
-n = block_size * block_size
-m = int(0.25 * n)  # 25% measurements
-k = 200            # sparsity level
+block_size_heigth = original.shape[0]
+block_size_width = original.shape[1]
+block_size = (block_size_heigth, block_size_width)
+n = block_size_heigth * block_size_width
+# sparsity level
+# From analysis: 
+# low res: 32x40 (1280) * 0.2234 = 285.12 (285)
+# medium res: 128*160 (20480) * 0.0446 = 912.64 (913)
+# high res: 512*640 (327680) * 0.0129 = 4915.2 (4916)
+k = 2000
+m = k * 4 # Best we can do it seems
+
+#PRINT ALL THE VARIABLES
+print("Block size:", block_size)
+print("m (measurements):", m)
+print("k (sparsity level):", k)
 
 reconstructed = block_process_cs(original, block_size, m, k)
+print("Reconstruction completed.")
+print("Total time elapsed:", time.time() - start_time)
+
+# Calculate PSNR
+psnr = cv2.PSNR(original, reconstructed)
+print(f"PSNR: {psnr:.2f} dB")
 
 # Show result
 show_images([original, reconstructed], ["Original", "Compressed Sensing Reconstruction"])
