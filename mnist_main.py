@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
+from torch.optim import Adam
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import cv2
@@ -19,12 +19,12 @@ print(f"Using device: {device}")
 # Global configuration variables
 task = 'train' #'train' # 'test  # Task name
 train_batch_size = 32
-num_epochs = 30
+num_epochs = 50
 learning_rate = 1e-4
-num_scales = 15
+num_scales = 100
 sigma_min = 0.01
 sigma_max = 1.0
-steps_per_noise_lvl = 25 # Number of steps per noise level
+steps_per_noise_lvl = 5 # Number of steps per noise level
 recon_batch_size = 1
 anneal_power = 1. # Annealing power for Langevin dynamics
 
@@ -214,26 +214,14 @@ def loss_fn(model, x, marginal_prob_std, eps=1e-8, show_image=False):
     #plot_marginal_prob_std()
     # Generate a sigma from the noise schedule from a number from 0 to num_scales-1
     random_t = torch.rand(x.shape[0]).to(device) * (1. - eps) + eps
-    #print("random_t.shape:", random_t.shape)
     z = torch.randn_like(x, )
     random_t_schedule = torch.floor(random_t * num_scales).long()
-    # print("random_t_schedule.shape:", random_t_schedule.shape)
     
-    # std = marginal_prob_std(random_t)
-    # print("std.shape:", std.shape)
-    # print("noise_schedule.sigmas.shape:", noise_schedule.sigmas.shape)
-    # print("noise_schedule.sigmas[random_t_schedule].shape:", noise_schedule.sigmas[random_t_schedule].shape)
-    # How to create a tensor with size x.shape[0] and fill it with the values of noise_schedule.sigmas[random_t_schedule]
-    std = torch.zeros(x.shape[0]).to(device)
-    #print("std.shape:", std.shape)
-    for i in range(len(random_t_schedule)):
-        #print("i:", i, "random_t_schedule[i]:", random_t_schedule[i])
-        std[i] = noise_schedule.sigmas[random_t_schedule[i]]
-
-    std = std.view(-1, 1, 1, 1) # Reshape to match x's shape
-    #print("std.shape:", std.shape)
-    #std = noise_schedule.sigmas[random_t_schedule].view(-1, 1, 1, 1)  # Reshape to match x's shape
-    perturbed_x = x + z * std#[:, None, None, None] # Broadcasting to match x's shape
+    std = marginal_prob_std(random_t)
+    perturbed_x = x + z * std[:, None, None, None]
+    #std = torch.zeros(x.shape[0]).to(device)
+    #std = noise_schedule.sigmas[random_t_schedule].view(-1, 1, 1, 1) # Reshape to match x's shape
+    #perturbed_x = x + z * std#[:, None, None, None] # Broadcasting to match x's shape
     
     if show_image:
 
@@ -250,7 +238,7 @@ def loss_fn(model, x, marginal_prob_std, eps=1e-8, show_image=False):
 
     score = model(perturbed_x, random_t)
 
-    loss = torch.mean(torch.sum((score*std + z)**2, dim=(1,2,3)))
+    loss = torch.mean(torch.sum((score*std[:, None, None, None] + z)**2, dim=(1,2,3)))
     return loss
 
 # =====================
@@ -403,7 +391,7 @@ def show_reconstructed_image(x, y_recon, title, wait=False):
 def train_score_model():
     score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
     score_model = score_model.to(device)
-    optimizer = optim.Adam(score_model.parameters(), lr=learning_rate)
+    optimizer = Adam(score_model.parameters(), lr=learning_rate)
     
     num_of_batches = len(data_loader)
     print("Number of batches:", num_of_batches)
@@ -416,7 +404,7 @@ def train_score_model():
             x = x.to(device)
             #x = x.view(-1, 1, x.shape[1], x.shape[2]) # Reshape to (batch_size, channels, height, width)
             
-            loss = loss_fn(score_model, x, marginal_prob_std_fn, show_image=False)
+            loss = loss_fn(score_model, x, marginal_prob_std_fn, show_image=True)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
