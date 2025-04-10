@@ -16,6 +16,15 @@ from scipy.sparse import diags
 
 SHOW_DOWNSAMPLE_IMAGES = True
 
+task = 'normal'
+
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+exec(open('configurator.py').read()) # overrides from command line or config file
+config = {k: globals()[k] for k in config_keys} # will be useful for logging
+print("Configuration:")
+for k, v in config.items():
+    print(f"{k}: {v}")
+
 # Directory paths
 HR_train_data_output_dir = Path("./images/high_res_train")
 HR_test_data_output_dir = Path("./images/high_res_test")
@@ -31,6 +40,16 @@ MR_train_file_name = "medium_res_train_0.jpg"
 MR_test_file_name = "medium_res_test_0.jpg"
 LR_train_file_name = "low_res_train_0.jpg"
 LR_test_file_name = "low_res_test_0.jpg"
+
+if task == 'square': 
+    print("Square task selected.")
+    # Directory paths for square images
+    HR_train_data_output_dir = Path("./images-square/high_res_train")
+    HR_test_data_output_dir = Path("./images-square/high_res_test")
+    MR_train_data_output_dir = Path("./images-square/medium_res_train")
+    MR_test_data_output_dir = Path("./images-square/medium_res_test")
+    LR_train_data_output_dir = Path("./images-square/low_res_train")
+    LR_test_data_output_dir = Path("./images-square/low_res_test")
 
 def create_binomial_filter_1d(k=2):
     """Create 1D binomial filter coefficients"""
@@ -172,10 +191,18 @@ if __name__ == '__main__':
         D_height = create_downsample_matrix(512, 4)  # 128×512
         D_width = create_downsample_matrix(640, 4)   # 160×640
 
+        if task == 'square':
+            print("Square task selected. Setting D_height and D_width to 512")
+            D_height = create_downsample_matrix(512, 4)
+            D_width = create_downsample_matrix(512, 4)
         # For 128×160 → 32×40
         D_height2 = create_downsample_matrix(128, 4)  # 32×128
         D_width2 = create_downsample_matrix(160, 4)   # 40×160
 
+        if task == 'square':
+            print("Square task selected. Setting D_height2 and D_width2 to 128")
+            D_height2 = create_downsample_matrix(128, 4)
+            D_width2 = create_downsample_matrix(128, 4)
         mr_image_down = D_height @ hr_image @ D_width.T
         plt.subplot(2, 3, 5)
         plt.imshow(mr_image_down, cmap='gray')
