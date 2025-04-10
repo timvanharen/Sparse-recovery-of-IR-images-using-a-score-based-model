@@ -240,7 +240,7 @@ def show_images(imgs, titles):
 start_time = time.time()
 print("Starting compressed sensing reconstruction...")
 # Load original image
-image_path = Path('medium_res_train_0.jpg')
+image_path = Path('images-square/low_res_train_15.jpg')
 original = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")

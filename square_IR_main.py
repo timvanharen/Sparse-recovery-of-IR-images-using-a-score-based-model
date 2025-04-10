@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import cv2
@@ -15,10 +16,12 @@ from pathlib import Path
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Global configuration variables
-task = 'reconstruct' #'train' # 'test  # Task name
-train_batch_size = 512
-num_epochs = 2000
-learning_rate = 1e-5
+task = 'train' #'train' # 'test  # Task name
+train_batch_size = 32
+num_epochs = 4000
+learning_rate = 1e-4
+weigth_decay = 1e-4
+stopping_criterion = 100 # Stop training if the loss is less than this value
 num_scales = 40
 sigma_min = 0.01
 sigma_max = 1.0
@@ -538,7 +541,8 @@ def show_reconstructed_image(x, y, y_recon, title, wait=False):
 def train_score_model():
     score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
     score_model = score_model.to(device)
-    optimizer = Adam(score_model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(score_model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5)
     
     num_of_batches = len(data_loader)
     print("Number of batches:", num_of_batches)
@@ -554,6 +558,9 @@ def train_score_model():
             loss = loss_fn(score_model, x, marginal_prob_std_fn, show_image=False, eps=eps)
             optimizer.zero_grad()
             loss.backward()
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(score_model.parameters(), 1.0)
+
             optimizer.step()
             avg_loss += loss.item() * x.shape[0]
             num_items += x.shape[0]
@@ -561,10 +568,17 @@ def train_score_model():
 
             if batch_idx % (num_of_batches // 10) == 0:
                 print('Epoch:', epoch, '| Batch:', batch_idx, '| Loss: {:5f}'.format(loss.item()))
-        print('Epoch:', epoch, '/', num_epochs, '| Average Loss: {:5f}'.format(avg_loss / num_items), '| Time:', time.time() - start_epoch_time)
+        
+        # Scheduler step (if using ReduceLROnPlateau)
+        scheduler.step(loss)
+        print(f"Epoch: {epoch}/{num_epochs}, Average Loss: {(avg_loss / num_items)}, LR: {optimizer.param_groups[0]['lr']}, Time: {time.time() - start_epoch_time}")
         
         # Update the checkpoint after each epoch of training.
         torch.save(score_model.state_dict(), 'checkpoints/square/square_model.pth')
+
+        if avg_loss / num_items < stopping_criterion:
+            print('Stopping criterion reached.')
+            break
     return score_model
 from scipy import integrate
 
@@ -677,7 +691,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images-square/low_res_train',
-        high_res_dir='images-square/high_res_train'
+        high_res_dir='images-square/medium_res_train'
     )
 
     # Get image dimensions

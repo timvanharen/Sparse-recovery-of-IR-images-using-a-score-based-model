@@ -76,7 +76,7 @@ def show_images(imgs, titles):
 start_time = time.time()
 print("Starting compressed sensing reconstruction...")
 # Load original image
-image_path = Path('medium_res_train_0.jpg')
+image_path = Path('../images-square/low_res_train_15.jpg')
 original = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")
@@ -86,12 +86,12 @@ block_size_width = original.shape[1]
 block_size = (block_size_heigth, block_size_width)
 n = block_size_heigth * block_size_width
 # sparsity level
-# From analysis: 
-# low res: 32x40 (1280) * 0.2234 = 285.12 (285)
-# medium res: 128*160 (20480) * 0.0446 = 912.64 (913)
-# high res: 512*640 (327680) * 0.0129 = 4915.2 (4916)
-k = 913
-m = k * 6 # Best we can do it seemsW
+# From analysis of square images
+# low res: 32x32 (1.024) * 0.2234 = 225.12 (226)
+# medium res: 128*128 (16384) * 0.0446 = 655,36 (656)
+# high res: 512*512 (262144) * 0.0129 = 3381,6576 (3382)
+k = 226
+m = k * 4 # Best we can do it seemsW
 
 #PRINT ALL THE VARIABLES
 print("Block size:", block_size)
