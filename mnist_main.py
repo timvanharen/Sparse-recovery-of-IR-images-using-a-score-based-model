@@ -550,7 +550,7 @@ if __name__ == "__main__":
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/score_model.pth'))
-        score_model.eval()
+        #score_model.eval()
 
         # Generate measurements by downscaling the image in x to y, dummy TODO: Use compressed measuremnts
         y_meas = cv2.resize(x[0, 0].cpu().numpy(), (x.shape[2]//2, x.shape[3]//2), interpolation=cv2.INTER_LINEAR)
