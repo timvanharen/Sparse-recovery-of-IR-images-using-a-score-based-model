@@ -16,16 +16,16 @@ from pathlib import Path
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Global configuration variables
 task = 'reconstruct' #'train' # 'test  # Task name
-train_batch_size = 256
-num_epochs = 300
-learning_rate = 1e-4
+train_batch_size = 512
+num_epochs = 2000
+learning_rate = 1e-5
 num_scales = 40
 sigma_min = 0.01
 sigma_max = 1.0
 steps_per_noise_lvl = 20 # Number of steps per noise level
 recon_batch_size = 1
 anneal_power = 1. # Annealing power for Langevin dynamics
-eps = 1e-5 # Small value for numerical stability
+eps = 1e-7 # Small value for numerical stability
 
 PRINT_SIZE = False # Set to True to print the size of each layer in the model
 # config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -677,7 +677,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images-square/low_res_train',
-        high_res_dir='images-square/medium_res_train'
+        high_res_dir='images-square/high_res_train'
     )
 
     # Get image dimensions
