@@ -28,12 +28,12 @@ num_measurements = 32 # Number of measurements
 snr_db = 20 # Signal-to-noise ratio in dB
 anneal_power = 2. # Annealing power for Langevin dynamics
 
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-exec(open('configurator.py').read()) # overrides from command line or config file
-config = {k: globals()[k] for k in config_keys} # will be useful for logging
-print("Configuration:")
-for k, v in config.items():
-    print(f"{k}: {v}")
+# config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+# exec(open('configurator.py').read()) # overrides from command line or config file
+# config = {k: globals()[k] for k in config_keys} # will be useful for logging
+# print("Configuration:")
+# for k, v in config.items():
+#     print(f"{k}: {v}")
 
 HR_train_data_output_dir = Path("./images/high_res_train")
 HR_test_data_output_dir = Path("./images/high_res_test")
@@ -220,7 +220,7 @@ class ScoreNet(nn.Module):
 
     # Decoding layers where the resolution increases
 #Decode layer 6    
-    self.tconv6 = nn.ConvTranspose2d(channels[5], channels[4], 3, stride=2, bias=False)
+    self.tconv6 = nn.ConvTranspose2d(channels[5], channels[4], 3, stride=2, bias=False, output_padding=1)
     self.dense7 = Dense(embed_dim, channels[4])
     self.tgnorm6 = nn.GroupNorm(32, num_channels=channels[4])
 #Decode layer 5    

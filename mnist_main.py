@@ -21,12 +21,13 @@ task = 'train' #'train' # 'test  # Task name
 train_batch_size = 32
 num_epochs = 50
 learning_rate = 1e-4
-num_scales = 100
+num_scales = 20
 sigma_min = 0.01
 sigma_max = 1.0
 steps_per_noise_lvl = 5 # Number of steps per noise level
 recon_batch_size = 1
 anneal_power = 1. # Annealing power for Langevin dynamics
+eps = 1e-5 # Small value for numerical stability
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -36,8 +37,8 @@ for k, v in config.items():
     print(f"{k}: {v}")
 
 # Create checkpoint directory if it doesn't exist
-if not os.path.exists('checkpoints'):
-    os.makedirs('checkpoints')
+if not os.path.exists('checkpoints/MNIST'):
+    os.makedirs('checkpoints/MNIST')
 
 # =====================
 # ScoreNet Implementation
@@ -122,6 +123,7 @@ class ScoreNet(nn.Module):
   def forward(self, x, t): 
     # Obtain the Gaussian random feature embedding for t   
     embed = self.act(self.embed(t))    
+    
     # Encoding path
     h1 = self.conv1(x)    
     ## Incorporate information from t
@@ -256,17 +258,17 @@ class NoiseSchedule:
 # =====================
 # Annealed Langevin Dynamics
 # =====================
-def annealed_langevin_dynamics(y, D_height, D_width, x, model):
+def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
     noise_schedule = NoiseSchedule(num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max)
     
     current_h = torch.rand(recon_batch_size, 1, x.shape[0], x.shape[1], device=device, requires_grad=True)
-    
+
     # Store reconstruction process
     reconstruction_process = []
 
     # Annealing hyper parameter for Langevin dynamics
     alpha = 0.1
-    beta = 0.2
+    beta = 0.5
     r = 0.9
 
     # COnvert to tesnor and to device
@@ -286,11 +288,15 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model):
 
             # Compute the gradient of the likelihood term
             grad_likelihood = D_height.T @ residual.view(14, 14) @ D_width
-            
+
             # Prior term
+
+            t = torch.rand(current_h.shape[0]).to(device) * (1. - eps) + eps
+            t[0] = ((num_scales-i) / num_scales) *(1.-eps) + eps
+            #t = t.view(-1, 1).float() # Reshape to match the input shape of the model
             with torch.no_grad():
-                score = model(current_h, sigma * torch.ones(1, device=device)) # TODO: we need t
-            
+                score = model(current_h, t)
+
             # Noise term
             noise_term = torch.sqrt(2*beta * step_size) * sigma * torch.randn_like(current_h)
             
@@ -298,7 +304,7 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model):
             current_h = current_h + step_size * (score + grad_likelihood.view_as(current_h)) / (anneal_power**2 + sigma**2) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
         i += 1
         reconstruction_process.append(current_h.detach().cpu().numpy())
-        show_reconstructed_image(x.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
+        # show_reconstructed_image(x.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
     
     # Final reconstruction
     reconstructed_img = current_h.squeeze().detach().cpu().numpy()
@@ -318,11 +324,11 @@ def psnr(original, reconstructed):
     mse = np.mean((original - reconstructed)**2)
     return 20 * np.log10(1.0 / np.sqrt(mse + 1e-10))
 
-def reconstruct_and_evaluate(y, D_heigth, D_width, x, model):
+def reconstruct_and_evaluate(y, D_heigth, D_width, x, model, eps):
     """Evaluate reconstruction method"""
     results = {}
     start = time.time()
-    recon, process = annealed_langevin_dynamics(y, D_heigth, D_width, x, model)
+    recon, process = annealed_langevin_dynamics(y, D_heigth, D_width, x, model, eps)
     print("recon.shape:", recon.shape)
     print("y.shape:", y.shape)
     results['score_model'] = {
@@ -351,16 +357,21 @@ def plot_results(results, x):
     
     plt.tight_layout()
     plt.savefig('comparison_results.jpg', dpi=300)
-    plt.show()
+    # plt.show()
     
     # Plot reconstruction process
     if 'process' in results['score_model']:
         plot_reconstruction_process(results['score_model']['process'])
 
 def plot_reconstruction_process(process):
-    plt.figure(figsize=(12, 8))
-    for i, img in enumerate(process[:10]):  # Show first 10 steps
-        plt.subplot(2, 5, i+1)
+    plt.figure(figsize=(12, 10))
+    # Calculate the amount of rows and columns needed for the subplots
+    num_images = len(process)
+    num_cols = 5
+    num_rows = (num_images + num_cols - 1) // num_cols  # Ceiling division
+
+    for i, img in enumerate(process):
+        plt.subplot(num_rows, num_cols, i+1)
         plt.imshow(img[0,0], cmap='gray')
         plt.title(f"Step {i}")
         plt.axis('off')
@@ -404,7 +415,7 @@ def train_score_model():
             x = x.to(device)
             #x = x.view(-1, 1, x.shape[1], x.shape[2]) # Reshape to (batch_size, channels, height, width)
             
-            loss = loss_fn(score_model, x, marginal_prob_std_fn, show_image=True)
+            loss = loss_fn(score_model, x, marginal_prob_std_fn, show_image=False, eps=eps)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -417,7 +428,7 @@ def train_score_model():
         print('Epoch:', epoch, '/', num_epochs, '| Average Loss: {:5f}'.format(avg_loss / num_items), '| Time:', time.time() - start_epoch_time)
         
         # Update the checkpoint after each epoch of training.
-        torch.save(score_model.state_dict(), 'checkpoints/score_model.pth')
+        torch.save(score_model.state_dict(), 'checkpoints/MNIST/mnist_model.pth')
     return score_model
 from scipy import integrate
 
@@ -539,8 +550,8 @@ if __name__ == "__main__":
     if task == 'train':
         print("Training score model...")
         score_model = train_score_model()
-        torch.save(score_model.state_dict(), 'checkpoints/score_model.pth')
-        print("Model saved to checkpoints/score_model.pth")
+        torch.save(score_model.state_dict(), 'checkpoints/MNIST/mnist_model.pth')
+        print("Model saved to checkpoints/mnist_model.pth")
         print("Training completed.")
         exit()
 
@@ -549,7 +560,7 @@ if __name__ == "__main__":
 
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/score_model.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
         #score_model.eval()
 
         # Generate measurements by downscaling the image in x to y, dummy TODO: Use compressed measuremnts
@@ -568,7 +579,7 @@ if __name__ == "__main__":
         D_width = torch.tensor(D_width, dtype=torch.float32).to(device)  # Convert to tensor and move to device
 
         # Reconstruct and evaluate compressed measurement
-        results = reconstruct_and_evaluate(y_down, D_height, D_width, x[0,0], score_model)
+        results = reconstruct_and_evaluate(y_down, D_height, D_width, x[0,0], score_model, eps=eps)
 
         # Print metrics
         print("\nEvaluation Results:")
@@ -581,7 +592,7 @@ if __name__ == "__main__":
     if task == "generate": # Just generate from noise
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/score_model.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
         score_model.eval()
 
         start_inference_time = time.time()
@@ -594,7 +605,8 @@ if __name__ == "__main__":
                         marginal_prob_std_fn,
                         diffusion_coeff_fn,
                         sample_batch_size,
-                        device=device)
+                        device=device,
+                        eps=eps)
         
         print("end inference time:", time.time() - start_inference_time)
         ## Sample visualization.
