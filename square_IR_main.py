@@ -16,7 +16,7 @@ from pathlib import Path
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Global configuration variables
-task = 'train' #'train' # 'test  # Task name
+task = 'reconstruct' #'train' # 'test  # Task name
 train_batch_size = 512
 num_epochs = 400
 learning_rate = 1e-3
@@ -25,7 +25,7 @@ stopping_criterion = 0.1 # Stop training if the loss is less than this value
 num_scales = 40
 sigma_min = 0.01
 sigma_max = 1.0
-steps_per_noise_lvl = 20 # Number of steps per noise level
+steps_per_noise_lvl = 3 # Number of steps per noise level
 recon_batch_size = 1
 anneal_power = 1. # Annealing power for Langevin dynamics
 eps = 1e-7 # Small value for numerical stability
@@ -369,26 +369,18 @@ class NoiseSchedule:
 # =====================
 def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
     noise_schedule = NoiseSchedule(num_scales=num_scales, sigma_min=sigma_min, sigma_max=sigma_max)
-    
 
     y = y.to(device) # Move y to device
     x = x.to(device) # Move x to device
-    print('x.shape:', x.shape)
-    print('D_height.shape:', D_height.shape)
-    print('D_width.shape:', D_width.shape)
-    print('y.shape:', y.shape)
-    print("x: ", x)
-    print("y: ", y)
-    print("D_height: ", D_height)
-    print("D_width: ", D_width)
+
     current_h = torch.rand(recon_batch_size, 1, x.shape[0], x.shape[1], device=device, requires_grad=True)
 
     # Store reconstruction process
     reconstruction_process = []
 
     # Annealing hyper parameter for Langevin dynamics
-    alpha = 0.5
-    beta = 0.5
+    alpha = 1
+    beta = 5
     r = 0.9
     anneal_power = 0.5
 
@@ -465,14 +457,6 @@ def reconstruct_and_evaluate(y, D_heigth, D_width, x, model, eps):
 def plot_results(results, y, x):
     plt.figure(figsize=(18, 6))
 
-    #     # let's upscale the image using new  width and height
-    # up_width = 600
-    # up_height = 600
-    # up_points = (up_width, up_height)
-    # resized_up_x = cv2.resize(x, up_points, interpolation= cv2.INTER_LINEAR)
-    # resized_up_y = cv2.resize(y, up_points, interpolation= cv2.INTER_LINEAR)
-    # resized_up_recon = cv2.resize(y_recon, up_points, interpolation= cv2.INTER_LINEAR)
-
     # Ground Truth
     plt.subplot(1, 3, 1)
     plt.imshow(x, cmap='gray')
@@ -490,8 +474,7 @@ def plot_results(results, y, x):
     
     plt.tight_layout()
     plt.savefig('comparison_results.jpg', dpi=300)
-    # plt.show()
-    
+
     # Plot reconstruction process
     if 'process' in results['score_model']:
         plot_reconstruction_process(results['score_model']['process'])
@@ -700,7 +683,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images-square/low_res_train',
-        high_res_dir='images-square/high_res_train'
+        high_res_dir='images-square/medium_res_train'
     )
 
     # Get image dimensions
@@ -732,16 +715,16 @@ if __name__ == "__main__":
 
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/square/square_model.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/square/square_model_med_400_epoch_1e-3_1e-1.pth'))
         #score_model.eval()
 
         # COmment these out for the real compressed measurements
         # ==================
         # Generate measurements by downscaling the image in x to y
-        factor = 2
-        y_meas = cv2.resize(x[0].cpu().numpy(), (x.shape[1]//factor, x.shape[2]//factor), interpolation=cv2.INTER_LINEAR)
-        y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
-        y_meas = y_meas.flatten().to(device)  # Flatten and move to device
+        # factor = 2
+        # y_meas = cv2.resize(x[0].cpu().numpy(), (x.shape[1]//factor, x.shape[2]//factor), interpolation=cv2.INTER_LINEAR)
+        # y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        # y_meas = y_meas.flatten().to(device)  # Flatten and move to device
         # ==================
 
         # Create downsample matrices for the images
@@ -750,20 +733,20 @@ if __name__ == "__main__":
 
         # COmment these out for the real compressed measurements
         # ==================
-        y_down = D_height @ x[0].cpu().numpy() @ D_width.T
-        y = torch.tensor(y_down, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        # y_down = D_height @ x[0].cpu().numpy() @ D_width.T
+        # y = torch.tensor(y_down, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         # ==================
         D_height = torch.tensor(D_height, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         D_width = torch.tensor(D_width, dtype=torch.float32).to(device)  # Convert to tensor and move to device
 
         # Reconstruct and evaluate compressed measurement
-        results = reconstruct_and_evaluate(y, D_height, D_width, x[0], score_model, eps=eps)
+        results = reconstruct_and_evaluate(y[0], D_height, D_width, x[0], score_model, eps=eps)
 
         # Print metrics
         print("\nEvaluation Results:")
         print(f"NCSN + Annealed Langevin Dynamics Method - NMSE: {results['score_model']['nmse']:.4f}, Time: {results['score_model']['time']:.2f}s")
         # Visualize
-        plot_results(results, y.cpu().numpy(), x[0].cpu().numpy())
+        plot_results(results, y[0].cpu().numpy(), x[0].cpu().numpy())
         print("Reconstruction completed.")
         exit()
     

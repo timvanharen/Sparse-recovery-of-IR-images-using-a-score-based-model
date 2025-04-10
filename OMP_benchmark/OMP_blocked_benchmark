@@ -28,7 +28,7 @@ def compressed_sensing_block_reconstruct(y, Phi, D, k):
     recon_block = D @ x_hat
     return recon_block
 
-def block_process_cs(img, block_size, m, k, seed=42):
+def block_process_cs(img, block_size, m, k, SNR, seed=42):
     np.random.seed(seed)
     h, w = img.shape
     n = block_size[0] * block_size[1]
@@ -36,6 +36,7 @@ def block_process_cs(img, block_size, m, k, seed=42):
     print("D shape", D.shape)
     recon = np.zeros_like(img, dtype=np.float32)
 
+    noise_tot = 0
     for i in range(0, h, block_size[0]):
         for j in range(0, w, block_size[1]):
             block = img[i:i+block_size[0], j:j+block_size[1]]
@@ -48,10 +49,10 @@ def block_process_cs(img, block_size, m, k, seed=42):
             Phi = np.random.randn(m, n)
             Phi /= np.linalg.norm(Phi, axis=1, keepdims=True)  # normalize rows
 
-            # Simulate compressed measurement y = Φx
-            x_dct = D.T @ x  # sparse representation
-
-            y = Phi @ x #@ D @ x_dct
+            # Incorporate noise
+            noise = np.random.randn(m) * SNR
+            noise_tot += np.sum(noise**2)
+            y = Phi @ x + noise
 
             # Reconstruct
             recon_block = compressed_sensing_block_reconstruct(y, Phi, D, k)
@@ -59,7 +60,7 @@ def block_process_cs(img, block_size, m, k, seed=42):
 
             recon[i:i+block_size[0], j:j+block_size[1]] = recon_block
 
-    return np.clip(recon, 0, 255).astype(np.uint8)
+    return np.clip(recon, 0, 255).astype(np.uint8), noise_tot
 
 def show_images(imgs, titles):
     plt.figure(figsize=(14, 5))
@@ -76,21 +77,27 @@ def show_images(imgs, titles):
 start_time = time.time()
 print("Starting compressed sensing reconstruction...")
 # Load original image
-image_path = Path('../images-square/low_res_train_15.jpg')
+image_path = Path('../images-square/high_res_train_15.jpg')
 original = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")
 
-block_size_heigth = original.shape[0]
-block_size_width = original.shape[1]
+block_size_heigth = original.shape[0] // 4
+block_size_width = original.shape[1]  // 4
 block_size = (block_size_heigth, block_size_width)
 n = block_size_heigth * block_size_width
 # sparsity level
 # From analysis of square images
-# low res: 32x32 (1.024) * 0.2234 = 225.12 (226)
-# medium res: 128*128 (16384) * 0.0446 = 655,36 (656)
+# low res: 32x32 (1.024) * 0.2234 = 225.12 (226), or 234
+# medium res: 128*128 (16384) * 0.0446 = 655,36 (656). or 787
 # high res: 512*512 (262144) * 0.0129 = 3381,6576 (3382)
-k = 226
+
+# Calculate the energy in the image
+energy = (np.sum(original**2) / n)
+print("Image energy:", energy)
+
+noise_power = energy * 0 # % noise
+k = 3382 # n*0.16
 m = k * 4 # Best we can do it seemsW
 
 #PRINT ALL THE VARIABLES
@@ -98,14 +105,18 @@ print("Block size:", block_size)
 print("m (measurements):", m)
 print("k (sparsity level):", k)
 
-reconstructed = block_process_cs(original, block_size, m, k)
+reconstructed, noise_tot = block_process_cs(original, block_size, m, k, noise_power)
 print("Reconstruction completed.")
-print("Total time elapsed:", time.time() - start_time)
 
-# Calculate PSNR
-psnr = cv2.PSNR(original, reconstructed)
-print(f"PSNR: {psnr:.2f} dB")
+# Calculate SNR of the reconstruction compared to the noise
+SNR = np.mean(original) / (noise_tot / n)
+snr_db = 10*np.log10(SNR)
+print("SNR:", snr_db)
 
-# Show result
-title = "OMP Reconstruction: k = {}, m = {}".format(k, m) + ", PSNR: {:.2f} dB".format(psnr)  
+# Calculate NMSE in db using frobenius norms
+nmse = 10 * np.log10(np.linalg.norm(original - reconstructed, ord='fro') ** 2 / np.linalg.norm(original, ord='fro') ** 2)
+print("NMSE:", nmse)
+
+# Show result including NMSE, SNR used for noise, K and M
+title = f"OMP Reconstructed (NMSE: {nmse:.1f}dB, SNR: {snr_db:.1f}dB, k: {k}, M: {m})"
 show_images([original, reconstructed], ["Original", title])

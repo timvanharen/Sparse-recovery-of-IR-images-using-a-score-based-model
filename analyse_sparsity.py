@@ -157,6 +157,7 @@ if __name__ == '__main__':
     hr_image = cv2.imread(os.path.join(HR_train_data_output_dir, HR_train_file_name), cv2.IMREAD_GRAYSCALE)
     mr_image = cv2.imread(os.path.join(MR_train_data_output_dir, MR_train_file_name), cv2.IMREAD_GRAYSCALE)
     lr_image = cv2.imread(os.path.join(LR_train_data_output_dir, LR_train_file_name), cv2.IMREAD_GRAYSCALE)
+    mnist_image = cv2.imread(os.path.join("mnist_mg_0.png"), cv2.IMREAD_GRAYSCALE)
     if hr_image is None or mr_image is None or lr_image is None:
         raise FileNotFoundError("Please place the images in the correct directories.")
     

@@ -18,16 +18,18 @@ print(f"Using device: {device}")
 
 # Global configuration variables
 task = 'train' #'train' # 'test  # Task name
-train_batch_size = 32
-num_epochs = 50
-learning_rate = 1e-4
-num_scales = 20
+train_batch_size = 512
+num_epochs = 400
+learning_rate = 1e-3
+weight_decay = 1e-1
+stopping_criterion = 0.1 # Stop training if the loss is less than this value
+num_scales = 40
 sigma_min = 0.01
 sigma_max = 1.0
-steps_per_noise_lvl = 5 # Number of steps per noise level
+steps_per_noise_lvl = 3 # Number of steps per noise level
 recon_batch_size = 1
 anneal_power = 1. # Annealing power for Langevin dynamics
-eps = 1e-5 # Small value for numerical stability
+eps = 1e-7 # Small value for numerical stability
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -240,6 +242,7 @@ def loss_fn(model, x, marginal_prob_std, eps=1e-8, show_image=False):
 
     score = model(perturbed_x, random_t)
 
+    # Batch average the loss
     loss = torch.mean(torch.sum((score*std[:, None, None, None] + z)**2, dim=(1,2,3)))
     return loss
 
@@ -267,9 +270,10 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
     reconstruction_process = []
 
     # Annealing hyper parameter for Langevin dynamics
-    alpha = 0.1
+    alpha = 0.5
     beta = 0.5
     r = 0.9
+    anneal_power = 0.5 # Annealing power for Langevin dynamics
 
     # COnvert to tesnor and to device
     alpha = torch.tensor(alpha, dtype=torch.float32, device=device)
@@ -287,7 +291,7 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
             residual = y.flatten() - (D_height @ current_h[0, 0] @ D_width.T).view(-1) # Flatten the current estimate from ([1, 1, 128, 160]) to ([20480])
 
             # Compute the gradient of the likelihood term
-            grad_likelihood = D_height.T @ residual.view(14, 14) @ D_width
+            grad_likelihood = D_height.T @ residual.view_as(y) @ D_width
 
             # Prior term
 
@@ -303,8 +307,9 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
             # Update the current estimate using annealed Langevin dynamics
             current_h = current_h + step_size * (score + grad_likelihood.view_as(current_h)) / (anneal_power**2 + sigma**2) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
         i += 1
-        reconstruction_process.append(current_h.detach().cpu().numpy())
-        # show_reconstructed_image(x.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
+        if i % 2 == 0:
+            reconstruction_process.append(current_h.detach().cpu().numpy())
+        # show_reconstructed_image(x.detach().cpu().numpy(), y.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
     
     # Final reconstruction
     reconstructed_img = current_h.squeeze().detach().cpu().numpy()
@@ -342,23 +347,27 @@ def reconstruct_and_evaluate(y, D_heigth, D_width, x, model, eps):
 # =====================
 # 5. Visualization
 # =====================
-def plot_results(results, x):
+def plot_results(results, y, x):
     plt.figure(figsize=(18, 6))
 
     # Ground Truth
-    plt.subplot(1, 2, 1)
+    plt.subplot(1, 3, 1)
     plt.imshow(x, cmap='gray')
     plt.title("Ground Truth")
 
+    # Compressed measurement Truth
+    plt.subplot(1, 3, 2)
+    plt.imshow(y, cmap='gray')
+    plt.title("Ground Truth")
+
     # score model
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 3)
     plt.imshow(results['score_model']['image'], cmap='gray')
     plt.title(f"NCSN Method\nNMSE: {results['score_model']['nmse']:.4f}")
     
     plt.tight_layout()
     plt.savefig('comparison_results.jpg', dpi=300)
-    # plt.show()
-    
+
     # Plot reconstruction process
     if 'process' in results['score_model']:
         plot_reconstruction_process(results['score_model']['process'])
@@ -381,23 +390,30 @@ def plot_reconstruction_process(process):
     plt.savefig('reconstruction_process.jpg', dpi=300)
     plt.show()
 
-def show_reconstructed_image(x, y_recon, title, wait=False):
+def show_reconstructed_image(x, y, y_recon, title, wait=False):
     # let's upscale the image using new  width and height
+    plt.figure(figsize=(12, 6))
     up_width = 600
     up_height = 600
     up_points = (up_width, up_height)
     resized_up_x = cv2.resize(x, up_points, interpolation= cv2.INTER_LINEAR)
+    resized_up_y = cv2.resize(y, up_points, interpolation= cv2.INTER_LINEAR)
     resized_up_recon = cv2.resize(y_recon, up_points, interpolation= cv2.INTER_LINEAR)
-    plt.subplot(1, 2, 1)
+    plt.subplot(1, 3, 1)
     plt.imshow(resized_up_x, cmap='gray', norm=None)
     plt.title("Original Image")
 
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
+    plt.imshow(resized_up_y, cmap='gray', norm=None)
+    plt.title("Compressed Image")
+
+    plt.subplot(1, 3, 3)
     plt.imshow(resized_up_recon, cmap='gray', norm=None)
     plt.title("reconstruction in progress")
     plt.savefig('reconstruction.jpg', dpi=300)
     if wait:
         plt.show()
+
 
 def train_score_model():
     score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
@@ -546,11 +562,16 @@ if __name__ == "__main__":
     print("Desired signal shape:", x.shape)
     print("Measurement shape:", y.shape)
 
+    # Save the first 5 images to the dir
+    for i in range(5):
+        img = x[i][0].cpu().numpy()
+        plt.imsave(f'images/mnist_mg_{i}.png', img, cmap='gray')
+
     # Train the model
     if task == 'train':
         print("Training score model...")
         score_model = train_score_model()
-        torch.save(score_model.state_dict(), 'checkpoints/MNIST/mnist_model.pth')
+        torch.save(score_model.state_dict(), 'checkpoints/MNIST/mnist_model_Yang.pth')
         print("Model saved to checkpoints/mnist_model.pth")
         print("Training completed.")
         exit()
@@ -560,20 +581,21 @@ if __name__ == "__main__":
 
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model_Yang.pth'))
         #score_model.eval()
 
         # Generate measurements by downscaling the image in x to y, dummy TODO: Use compressed measuremnts
-        y_meas = cv2.resize(x[0, 0].cpu().numpy(), (x.shape[2]//2, x.shape[3]//2), interpolation=cv2.INTER_LINEAR)
+        factor = 4
+        y_meas = cv2.resize(x[0,0].cpu().numpy(), (x.shape[2]//factor, x.shape[3]//factor), interpolation=cv2.INTER_LINEAR)
         y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         y_meas = y_meas.flatten().to(device)  # Flatten and move to device
 
         # Create downsample matrices for the images
         # For 28×28 → 14×14
-        D_height = create_downsample_matrix(28, 2)  # 32×128
-        D_width = create_downsample_matrix(28, 2)   # 40×160
+        D_height = create_downsample_matrix(28, factor)  # 32×128
+        D_width = create_downsample_matrix(28, factor)   # 40×160
 
-        y_down = D_height @ x[0, 0].cpu().numpy() @ D_width.T
+        y_down = D_height @ x[0,0].cpu().numpy() @ D_width.T
         y_down = torch.tensor(y_down, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         D_height = torch.tensor(D_height, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         D_width = torch.tensor(D_width, dtype=torch.float32).to(device)  # Convert to tensor and move to device
@@ -584,8 +606,9 @@ if __name__ == "__main__":
         # Print metrics
         print("\nEvaluation Results:")
         print(f"NCSN + Annealed Langevin Dynamics Method - NMSE: {results['score_model']['nmse']:.4f}, Time: {results['score_model']['time']:.2f}s")
+        
         # Visualize
-        plot_results(results, x[0,0].cpu().numpy())
+        plot_results(results, y_down.cpu().numpy(), x[0,0].cpu().numpy())
         print("Reconstruction completed.")
         exit()
     
@@ -593,11 +616,11 @@ if __name__ == "__main__":
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
-        score_model.eval()
+        #score_model.eval()
 
         start_inference_time = time.time()
 
-        sample_batch_size = 64 #@param {'type':'integer'}
+        sample_batch_size = 4 #@param {'type':'integer'}
         sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
 
         ## Generate samples using the specified sampler.

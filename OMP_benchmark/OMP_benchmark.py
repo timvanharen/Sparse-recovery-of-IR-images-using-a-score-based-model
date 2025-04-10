@@ -128,7 +128,6 @@ if __name__ == "__main__":
     print("A_exp.shape:", A_exp.shape)
     print("A_exp:", A_exp)
 
-
     # y is the lr_dct and y_HR is the hr_dct
     for batch_idx, (y, y_HR, y_img_lr, y_img_hr) in enumerate(dataloader):
         if batch_idx == 0:
