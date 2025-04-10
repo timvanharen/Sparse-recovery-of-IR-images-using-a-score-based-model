@@ -17,11 +17,11 @@ from pathlib import Path
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Global configuration variables
 task = 'train' #'train' # 'test  # Task name
-train_batch_size = 32
-num_epochs = 4000
-learning_rate = 1e-4
-weigth_decay = 1e-4
-stopping_criterion = 100 # Stop training if the loss is less than this value
+train_batch_size = 512
+num_epochs = 400
+learning_rate = 1e-3
+weight_decay = 1e-1
+stopping_criterion = 0.1 # Stop training if the loss is less than this value
 num_scales = 40
 sigma_min = 0.01
 sigma_max = 1.0
@@ -541,9 +541,10 @@ def show_reconstructed_image(x, y, y_recon, title, wait=False):
 def train_score_model():
     score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
     score_model = score_model.to(device)
-    optimizer = torch.optim.AdamW(score_model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(score_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5)
     
+    loss_arr = []
     num_of_batches = len(data_loader)
     print("Number of batches:", num_of_batches)
     for epoch in range(0, num_epochs):
@@ -572,13 +573,21 @@ def train_score_model():
         # Scheduler step (if using ReduceLROnPlateau)
         scheduler.step(loss)
         print(f"Epoch: {epoch}/{num_epochs}, Average Loss: {(avg_loss / num_items)}, LR: {optimizer.param_groups[0]['lr']}, Time: {time.time() - start_epoch_time}")
-        
+        loss_arr.append(avg_loss / num_items)
         # Update the checkpoint after each epoch of training.
         torch.save(score_model.state_dict(), 'checkpoints/square/square_model.pth')
 
         if avg_loss / num_items < stopping_criterion:
             print('Stopping criterion reached.')
             break
+    # Plot the loss curve
+    plt.plot(loss_arr)
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Loss Curve')
+    plt.grid()
+    plt.savefig('loss_curve.jpg', dpi=300)
+    plt.show()
     return score_model
 from scipy import integrate
 
@@ -691,7 +700,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images-square/low_res_train',
-        high_res_dir='images-square/medium_res_train'
+        high_res_dir='images-square/high_res_train'
     )
 
     # Get image dimensions
