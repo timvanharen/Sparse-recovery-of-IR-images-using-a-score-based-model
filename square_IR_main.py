@@ -349,6 +349,7 @@ def loss_fn(model, x, marginal_prob_std, eps=1e-8, show_image=False):
 
     score = model(perturbed_x, random_t)
 
+    # Batch average the loss
     loss = torch.mean(torch.sum((score*std[:, None, None, None] + z)**2, dim=(1,2,3)))
     return loss
 

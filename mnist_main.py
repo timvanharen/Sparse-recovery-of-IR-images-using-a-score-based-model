@@ -17,13 +17,13 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
 # Global configuration variables
-task = 'train' #'train' # 'test  # Task name
+task = 'reconstruct' #'train' / 'reconstruct' / 'generate'
 train_batch_size = 512
 num_epochs = 400
 learning_rate = 1e-3
 weight_decay = 1e-1
 stopping_criterion = 0.1 # Stop training if the loss is less than this value
-num_scales = 40
+num_scales = 20
 sigma_min = 0.01
 sigma_max = 1.0
 steps_per_noise_lvl = 3 # Number of steps per noise level
@@ -269,11 +269,15 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
     # Store reconstruction process
     reconstruction_process = []
 
+    # Solving R from a end value of 0.12, r**i = 0.12
+    log_end_r = np.log10(0.1) / num_scales
+    r = 10**(log_end_r) # This value should be set according to the number of scales, a nice end value is r**i = 0.12
+    print("r:", r)
     # Annealing hyper parameter for Langevin dynamics
-    alpha = 0.5
-    beta = 0.5
-    r = 0.9
-    anneal_power = 0.5 # Annealing power for Langevin dynamics
+    alpha = 0.9
+    beta = 1- alpha
+
+    anneal_power = 0.9 # Annealing power for Langevin dynamics, !!! greater than 1!!!
 
     # COnvert to tesnor and to device
     alpha = torch.tensor(alpha, dtype=torch.float32, device=device)
@@ -307,7 +311,7 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
             # Update the current estimate using annealed Langevin dynamics
             current_h = current_h + step_size * (score + grad_likelihood.view_as(current_h)) / (anneal_power**2 + sigma**2) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
         i += 1
-        if i % 2 == 0:
+        if i % (num_scales // 20) == 0: # save 20 steps
             reconstruction_process.append(current_h.detach().cpu().numpy())
         # show_reconstructed_image(x.detach().cpu().numpy(), y.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
     
@@ -382,7 +386,7 @@ def plot_reconstruction_process(process):
     for i, img in enumerate(process):
         plt.subplot(num_rows, num_cols, i+1)
         plt.imshow(img[0,0], cmap='gray')
-        plt.title(f"Step {i}")
+        plt.title(f"Step {i*num_scales//num_images}")
         plt.axis('off')
 
     plt.suptitle("Reconstruction Process")
@@ -571,7 +575,7 @@ if __name__ == "__main__":
     if task == 'train':
         print("Training score model...")
         score_model = train_score_model()
-        torch.save(score_model.state_dict(), 'checkpoints/MNIST/mnist_model_Yang.pth')
+        torch.save(score_model.state_dict(), 'checkpoints/MNIST/mnist_model.pth')
         print("Model saved to checkpoints/mnist_model.pth")
         print("Training completed.")
         exit()
@@ -581,11 +585,11 @@ if __name__ == "__main__":
 
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model_Yang.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
         #score_model.eval()
 
         # Generate measurements by downscaling the image in x to y, dummy TODO: Use compressed measuremnts
-        factor = 4
+        factor = 2
         y_meas = cv2.resize(x[0,0].cpu().numpy(), (x.shape[2]//factor, x.shape[3]//factor), interpolation=cv2.INTER_LINEAR)
         y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         y_meas = y_meas.flatten().to(device)  # Flatten and move to device
@@ -620,7 +624,7 @@ if __name__ == "__main__":
 
         start_inference_time = time.time()
 
-        sample_batch_size = 4 #@param {'type':'integer'}
+        sample_batch_size = 16 #@param {'type':'integer'}
         sampler = ode_sampler #@param ['Euler_Maruyama_sampler', 'pc_sampler', 'ode_sampler'] {'type': 'raw'}
 
         ## Generate samples using the specified sampler.
