@@ -89,6 +89,7 @@ class ImageDataset(Dataset):
         # hr_dct = cv2.dct(np.float32(hr_img))
 
         return torch.tensor(hr_img), torch.tensor(lr_img) # Train with dense representation / image and use low resoultuon as compressed measurement
+    
 class GaussianFourierProjection(nn.Module):
     """Gaussian random features for encoding time steps."""
     def __init__(self, embed_dim, scale=30.):
@@ -108,16 +109,6 @@ class Dense(nn.Module):
         self.dense = nn.Linear(input_dim, output_dim)
     def forward(self, x):
         return self.dense(x)[..., None, None]
-
-class DynamicPadCat(nn.Module):
-    def forward(self, x1, x2):
-        # x1: decoder feature, x2: encoder feature
-        diffY = x1.size()[2] - x2.size()[2]
-        diffX = x1.size()[3] - x2.size()[3]
-
-        x2 = F.pad(x2, [diffX // 2, diffX - diffX // 2,
-        diffY // 2, diffY - diffY // 2])
-        return torch.cat([x1, x2], dim=1)
 
 class ScoreNet(nn.Module):
   """A time-dependent score-based model built upon U-Net architecture."""
