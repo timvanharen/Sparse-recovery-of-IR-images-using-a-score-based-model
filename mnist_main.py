@@ -66,16 +66,6 @@ class Dense(nn.Module):
     def forward(self, x):
         return self.dense(x)[..., None, None]
 
-class DynamicPadCat(nn.Module):
-    def forward(self, x1, x2):
-        # x1: decoder feature, x2: encoder feature
-        diffY = x1.size()[2] - x2.size()[2]
-        diffX = x1.size()[3] - x2.size()[3]
-
-        x2 = F.pad(x2, [diffX // 2, diffX - diffX // 2,
-        diffY // 2, diffY - diffY // 2])
-        return torch.cat([x1, x2], dim=1)
-
 class ScoreNet(nn.Module):
   """A time-dependent score-based model built upon U-Net architecture."""
 

@@ -126,17 +126,17 @@ def dct_thresholding(dct_image, energy_threshold=0.95, clip_max=None, threshold=
     # Create a mask for the DCT coefficients above the threshold
     dct_energy = flat_dct[sorted_indices]
 
-    # Show a plot of the DCT energy distribution of the first 100 coefficients
-    plt.plot(dct_energy)
-    plt.title('DCT Energy Distribution')
-    plt.xlabel('Coefficient Index')
-    plt.ylabel('Energy')
-    plt.yscale('log')
-    plt.axhline(y=dct_energy[threshold_index], color='r', linestyle='--', label='Thresholded Energy')
-    plt.axvline(x=threshold_index, color='g', linestyle='--', label='Threshold Index')
-    plt.legend()
-    plt.grid()
-    plt.show()
+    # # Show a plot of the DCT energy distribution of the first 100 coefficients
+    # plt.plot(dct_energy)
+    # plt.title('DCT Energy Distribution')
+    # plt.xlabel('Coefficient Index')
+    # plt.ylabel('Energy')
+    # plt.yscale('log')
+    # plt.axhline(y=dct_energy[threshold_index], color='r', linestyle='--', label='Thresholded Energy')
+    # plt.axvline(x=threshold_index, color='g', linestyle='--', label='Threshold Index')
+    # plt.legend()
+    # plt.grid()
+    # plt.show()
 
     thresholded_coeff = dct_energy[threshold_index]
     mask = np.abs(dct_image) > thresholded_coeff
@@ -168,6 +168,38 @@ if __name__ == '__main__':
     print("High Resolution Image Shape: ", hr_shape)
     print("Medium Resolution Image Shape: ", mr_shape)
     print("Low Resolution Image Shape: ", lr_shape)
+
+    # Plot the whole process (original, dct(clipped) dct thresholded and inverse dct) for only the high resolution image
+    plt.subplot(2, 2, 1)
+    plt.imshow(hr_image, cmap='gray')
+    plt.title('High Resolution Image')
+
+        # Calculate the DCT of the images
+    hr_dct = cv2.dct(np.float32(hr_image))
+    # Compress the DCT coefficients using thresholding
+    print("\n ==== Compressing hr_dct coefficients ====")
+    hr_mask, hr_thresholded_coeff = dct_thresholding(hr_dct, energy_threshold=1*(10e-9)) # Tuned for good contruction this is a sparsity of 1.5% of the coefficients at 27PSNR
+    # Reconstruct the images using the thresholded DCT coefficients
+    hr_reconstructed = cv2.idct(hr_dct * hr_mask)
+    # Clip the original DCT values to (0, 1) for better visualization
+    hr_dct = np.clip(hr_dct, 0, 100)
+
+    plt.subplot(2, 2, 2)
+    plt.imshow(hr_dct, cmap='gray')
+    plt.title('DCT of High Resolution Image')
+
+    plt.subplot(2, 2, 4)
+    plt.imshow(hr_mask, cmap='gray')
+    plt.title('Thresholded DCT of High Resolution Image')
+
+    plt.subplot(2, 2, 3)
+    plt.imshow(hr_reconstructed, cmap='gray')
+    plt.title('Thresholded DCT of High Resolution Image')
+    
+    # Resize the window to the size of the image
+    plt.gcf().set_size_inches(18, 10)
+    plt.tight_layout()
+    plt.show()
 
     if SHOW_DOWNSAMPLE_IMAGES:
         # Show the images in subplots with the DCT underneath and the thresholded DCT underneath
