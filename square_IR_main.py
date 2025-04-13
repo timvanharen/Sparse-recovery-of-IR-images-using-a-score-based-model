@@ -518,6 +518,7 @@ def train_score_model():
     score_model = score_model.to(device)
     optimizer = torch.optim.AdamW(score_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5)
+    score_model.train()
     
     loss_arr = []
     num_of_batches = len(data_loader)
@@ -708,7 +709,7 @@ if __name__ == "__main__":
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/square/square_model_med_400_epoch_1e-3_1e-1.pth'))
-        #score_model.eval()
+        score_model.eval()
 
         # COmment these out for the real compressed measurements
         # ==================
@@ -746,7 +747,7 @@ if __name__ == "__main__":
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/square/square_model.pth'))
-        # score_model.eval()
+        score_model.eval()
 
         start_inference_time = time.time()
 

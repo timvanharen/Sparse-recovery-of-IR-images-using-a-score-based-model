@@ -606,7 +606,7 @@ if __name__ == "__main__":
         # score_model = 
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
-        #score_model.eval()
+        score_model.eval()
 
         # Generate measurements by downscaling the image in x to y, dummy TODO: Use compressed measuremnts
         factor = 2

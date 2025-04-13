@@ -413,6 +413,7 @@ def train_score_model():
     score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
     score_model = score_model.to(device)
     optimizer = Adam(score_model.parameters(), lr=learning_rate)
+    score_model.train()
     
     num_of_batches = len(data_loader)
     print("Number of batches:", num_of_batches)
@@ -576,7 +577,7 @@ if __name__ == "__main__":
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
-        #score_model.eval()
+        score_model.eval()
 
         # Generate measurements by downscaling the image in x to y, dummy TODO: Use compressed measuremnts
         factor = 2
@@ -610,7 +611,7 @@ if __name__ == "__main__":
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
         score_model.load_state_dict(torch.load('checkpoints/MNIST/mnist_model.pth'))
-        #score_model.eval()
+        score_model.eval()
 
         start_inference_time = time.time()
 
