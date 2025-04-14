@@ -77,13 +77,13 @@ def show_images(imgs, titles):
 start_time = time.time()
 print("Starting compressed sensing reconstruction...")
 # Load original image
-image_path = Path('../images-square/high_res_train_15.jpg')
+image_path = Path('../images-square/medium_res_train_15.jpg')
 original = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 if original is None:
     raise FileNotFoundError("Please place 'original.png' in the current directory.")
 
-block_size_heigth = original.shape[0] // 4
-block_size_width = original.shape[1]  // 4
+block_size_heigth = original.shape[0] #// 4
+block_size_width = original.shape[1]  #// 4
 block_size = (block_size_heigth, block_size_width)
 n = block_size_heigth * block_size_width
 # sparsity level
@@ -97,7 +97,7 @@ energy = (np.sum(original**2) / n)
 print("Image energy:", energy)
 
 noise_power = energy * 0 # % noise
-k = 3382 # n*0.16
+k = 787 # n*0.16
 m = k * 4 # Best we can do it seemsW
 
 #PRINT ALL THE VARIABLES

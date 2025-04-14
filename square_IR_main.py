@@ -370,11 +370,15 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
     # Store reconstruction process
     reconstruction_process = []
 
+    # Solving R from a end value of 0.12, r**i = 0.12
+    log_end_r = np.log10(0.1) / num_scales
+    r = 10**(log_end_r) # This value should be set according to the number of scales, a nice end value is r**i = 0.12
+    print("r:", r)
     # Annealing hyper parameter for Langevin dynamics
-    alpha = 1
-    beta = 5
-    r = 0.9
-    anneal_power = 0.5
+    alpha = 0.8
+    beta = 1 - alpha
+
+    anneal_power = 0.9 # Annealing power for Langevin dynamics
 
     # COnvert to tesnor and to device
     alpha = torch.tensor(alpha, dtype=torch.float32, device=device)
@@ -406,7 +410,7 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
             # Update the current estimate using annealed Langevin dynamics
             current_h = current_h + step_size * (score + grad_likelihood.view_as(current_h)) / (anneal_power**2 + sigma**2) + noise_term # is mean of grad_likelihood a logical choice? TODO: check
         i += 1
-        if i % 2 == 0:
+        if i % (num_scales // 20) == 0: # save 20 steps
             reconstruction_process.append(current_h.detach().cpu().numpy())
         # show_reconstructed_image(x.detach().cpu().numpy(), y.detach().cpu().numpy(), current_h[0, 0].detach().cpu().numpy(), f"Reconstruction Step {step}", wait=True)
     
@@ -457,7 +461,7 @@ def plot_results(results, y, x):
     # Compressed measurement Truth
     plt.subplot(1, 3, 2)
     plt.imshow(y, cmap='gray')
-    plt.title("Ground Truth")
+    plt.title("Compressed measurement")
 
     # score model
     plt.subplot(1, 3, 3)
@@ -481,7 +485,7 @@ def plot_reconstruction_process(process):
     for i, img in enumerate(process):
         plt.subplot(num_rows, num_cols, i+1)
         plt.imshow(img[0,0], cmap='gray')
-        plt.title(f"Step {i}")
+        plt.title(f"Step {i*num_scales//num_images}")
         plt.axis('off')
 
     plt.suptitle("Reconstruction Process")
@@ -512,6 +516,8 @@ def show_reconstructed_image(x, y, y_recon, title, wait=False):
     plt.savefig('reconstruction.jpg', dpi=300)
     if wait:
         plt.show()
+
+
 
 def train_score_model():
     score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
@@ -676,7 +682,7 @@ if __name__ == "__main__":
     # Load data
     dataset = ImageDataset(
         low_res_dir='images-square/low_res_train',
-        high_res_dir='images-square/medium_res_train'
+        high_res_dir='images-square/high_res_train'
     )
 
     # Get image dimensions
@@ -708,16 +714,16 @@ if __name__ == "__main__":
 
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/square/square_model_med_400_epoch_1e-3_1e-1.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/square/square_model_high_400_epoch_1e-3_1e-1.pth'))
         score_model.eval()
 
         # COmment these out for the real compressed measurements
         # ==================
         # Generate measurements by downscaling the image in x to y
-        # factor = 2
-        # y_meas = cv2.resize(x[0].cpu().numpy(), (x.shape[1]//factor, x.shape[2]//factor), interpolation=cv2.INTER_LINEAR)
-        # y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
-        # y_meas = y_meas.flatten().to(device)  # Flatten and move to device
+        factor = 4
+        y_meas = cv2.resize(x[0].cpu().numpy(), (x.shape[1]//factor, x.shape[2]//factor), interpolation=cv2.INTER_LINEAR)
+        y_meas = torch.tensor(y_meas, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        y_meas = y_meas.flatten().to(device)  # Flatten and move to device
         # ==================
 
         # Create downsample matrices for the images
@@ -726,27 +732,31 @@ if __name__ == "__main__":
 
         # COmment these out for the real compressed measurements
         # ==================
-        # y_down = D_height @ x[0].cpu().numpy() @ D_width.T
-        # y = torch.tensor(y_down, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        y_down = D_height @ x[0].cpu().numpy() @ D_width.T
+        y = torch.tensor(y_down, dtype=torch.float32).to(device)  # Convert to tensor and move to device
+        print("y.shape:", y.shape)
         # ==================
+        
         D_height = torch.tensor(D_height, dtype=torch.float32).to(device)  # Convert to tensor and move to device
         D_width = torch.tensor(D_width, dtype=torch.float32).to(device)  # Convert to tensor and move to device
 
         # Reconstruct and evaluate compressed measurement
-        results = reconstruct_and_evaluate(y[0], D_height, D_width, x[0], score_model, eps=eps)
+        #results = reconstruct_and_evaluate(y[0], D_height, D_width, x[0], score_model, eps=eps)
+        results = reconstruct_and_evaluate(y, D_height, D_width, x[0], score_model, eps=eps) # compressed from x
 
         # Print metrics
         print("\nEvaluation Results:")
         print(f"NCSN + Annealed Langevin Dynamics Method - NMSE: {results['score_model']['nmse']:.4f}, Time: {results['score_model']['time']:.2f}s")
         # Visualize
-        plot_results(results, y[0].cpu().numpy(), x[0].cpu().numpy())
+        #plot_results(results, y[0].cpu().numpy(), x[0].cpu().numpy()) # For real measurement
+        plot_results(results, y.cpu().numpy(), x[0].cpu().numpy()) # For compressed measurement
         print("Reconstruction completed.")
         exit()
     
     if task == "generate": # Just generate from noise
         score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
         score_model = score_model.to(device)
-        score_model.load_state_dict(torch.load('checkpoints/square/square_model.pth'))
+        score_model.load_state_dict(torch.load('checkpoints/square/square_model_med_400_epoch_1e-3_1e-1.pth'))
         score_model.eval()
 
         start_inference_time = time.time()

@@ -267,7 +267,7 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
     alpha = 0.9
     beta = 1- alpha
 
-    anneal_power = 0.9 # Annealing power for Langevin dynamics, !!! greater than 1!!!
+    anneal_power = 0.9 # Annealing power for Langevin dynamics
 
     # COnvert to tesnor and to device
     alpha = torch.tensor(alpha, dtype=torch.float32, device=device)
@@ -288,7 +288,6 @@ def annealed_langevin_dynamics(y, D_height, D_width, x, model,eps):
             grad_likelihood = D_height.T @ residual.view_as(y) @ D_width
 
             # Prior term
-
             t = torch.rand(current_h.shape[0]).to(device) * (1. - eps) + eps
             t[0] = ((num_scales-i) / num_scales) *(1.-eps) + eps
             #t = t.view(-1, 1).float() # Reshape to match the input shape of the model
@@ -352,7 +351,7 @@ def plot_results(results, y, x):
     # Compressed measurement Truth
     plt.subplot(1, 3, 2)
     plt.imshow(y, cmap='gray')
-    plt.title("Ground Truth")
+    plt.title("Compressed Measurement")
 
     # score model
     plt.subplot(1, 3, 3)
@@ -552,6 +551,7 @@ if __name__ == "__main__":
 
     # Get image dimensions
     data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, num_workers=4)
+    
     # Get the first batch of images
     x, y = next(iter(data_loader))
     print("Desired signal shape:", x.shape)
