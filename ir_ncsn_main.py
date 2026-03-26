@@ -203,7 +203,15 @@ def train(config, checkpoint_dir='checkpoints/ir_ncsn'):
         step = ckpt['step']
         if config.model.ema and 'ema_state' in ckpt:
             ema_helper.load_state_dict(ckpt['ema_state'])
+        if use_amp and scaler is not None and 'scaler_state' in ckpt:
+            scaler.load_state_dict(ckpt['scaler_state'])
         print(f"Resumed at epoch {start_epoch}, step {step}")
+
+    # Mixed precision setup
+    use_amp = getattr(config.training, 'mixed_precision', False)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp) if device == 'cuda' else None
+    if use_amp:
+        print("Mixed precision (float16) ENABLED")
 
     # Training loop
     train_losses = []
@@ -221,17 +229,28 @@ def train(config, checkpoint_dir='checkpoints/ir_ncsn'):
         for batch_idx, x in enumerate(data_loader):
             x = x.to(device)
 
-            # Compute denoising score matching loss
-            loss = anneal_dsm_score_estimation(
-                model, x, sigmas, labels=None,
-                anneal_power=config.training.anneal_power
-            )
-
             optimizer.zero_grad()
-            loss.backward()
-            # Gradient clipping for stability
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+
+            # Compute denoising score matching loss (with optional AMP)
+            if use_amp and scaler is not None:
+                with torch.amp.autocast('cuda'):
+                    loss = anneal_dsm_score_estimation(
+                        model, x, sigmas, labels=None,
+                        anneal_power=config.training.anneal_power
+                    )
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss = anneal_dsm_score_estimation(
+                    model, x, sigmas, labels=None,
+                    anneal_power=config.training.anneal_power
+                )
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
 
             # EMA update
             if config.model.ema:
@@ -278,6 +297,8 @@ def train(config, checkpoint_dir='checkpoints/ir_ncsn'):
             }
             if config.model.ema:
                 ckpt_data['ema_state'] = ema_helper.state_dict()
+            if use_amp and scaler is not None:
+                ckpt_data['scaler_state'] = scaler.state_dict()
 
             torch.save(ckpt_data, os.path.join(checkpoint_dir, f'ckpt_epoch_{epoch}.pth'))
             torch.save(ckpt_data, ckpt_path)  # Always overwrite latest
@@ -329,6 +350,7 @@ def measurement_guided_langevin_dynamics(
         likelihood_weight: Weight for the likelihood gradient term
     """
     device = y.device
+    use_amp = getattr(config.training, 'mixed_precision', False) and device != 'cpu'
 
     # Initialize from noise
     x = torch.randn(1, 1, image_size, image_size, device=device)
@@ -346,7 +368,9 @@ def measurement_guided_langevin_dynamics(
 
         for s in range(n_steps_each):
             # 1. Score (prior gradient): grad_x log p(x | sigma)
-            score = model(x, labels)
+            with torch.amp.autocast('cuda', enabled=use_amp):
+                score = model(x, labels)
+            score = score.float()  # ensure float32 for Langevin math
 
             # 2. Likelihood gradient: grad_x log p(y | x)
             # For y = D_h @ x @ D_w^T, the gradient is D_h^T @ (y - D_h @ x @ D_w^T) @ D_w
@@ -382,7 +406,9 @@ def measurement_guided_langevin_dynamics(
 
     # Final denoising step (Song & Ermon 2019, Sec 3.2)
     last_labels = torch.ones(1, device=device).long() * (num_sigmas - 1)
-    x = x + sigmas[-1] ** 2 * model(x, last_labels)
+    with torch.amp.autocast('cuda', enabled=use_amp):
+        final_score = model(x, last_labels)
+    x = x + sigmas[-1] ** 2 * final_score.float()
 
     reconstruction_process.append(x.detach().cpu().numpy())
 
@@ -579,6 +605,7 @@ def generate(config, checkpoint_dir='checkpoints/ir_ncsn', output_dir='results/i
 
     # Initialize from noise
     x = torch.randn(n_samples, 1, image_size, image_size, device=device)
+    use_amp = getattr(config.training, 'mixed_precision', False) and device != 'cpu'
 
     print(f"Generating {n_samples} images with annealed Langevin dynamics...")
     t_start = time.time()
@@ -588,7 +615,9 @@ def generate(config, checkpoint_dir='checkpoints/ir_ncsn', output_dir='results/i
         step_size = step_lr * (sigma / sigmas[-1]) ** 2
 
         for s in range(n_steps_each):
-            score = model(x, labels)
+            with torch.amp.autocast('cuda', enabled=use_amp):
+                score = model(x, labels)
+            score = score.float()
             noise = torch.randn_like(x)
             x = x + step_size * score + torch.sqrt(2 * step_size) * noise
 
@@ -598,7 +627,9 @@ def generate(config, checkpoint_dir='checkpoints/ir_ncsn', output_dir='results/i
     # Final denoising
     if config.sampling.denoise:
         last_labels = torch.ones(n_samples, device=device).long() * (len(sigmas) - 1)
-        x = x + sigmas[-1] ** 2 * model(x, last_labels)
+        with torch.amp.autocast('cuda', enabled=use_amp):
+            final_score = model(x, last_labels)
+        x = x + sigmas[-1] ** 2 * final_score.float()
 
     elapsed = time.time() - t_start
     print(f"Generation took {elapsed:.1f}s")
@@ -644,18 +675,27 @@ def main():
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
-    # Disable TF32 for precision
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
+    # Load config first so we can check precision settings
+    config = load_config(args.config)
+
+    # Precision settings
+    use_amp = getattr(config.training, 'mixed_precision', False)
+    if use_amp:
+        # Allow TF32 when using mixed precision for maximum speed
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = True
 
-    # Load config
-    config = load_config(args.config)
     print(f"Task: {args.task}")
     print(f"Config: {args.config}")
     print(f"Device: {config.device}")
     print(f"Image size: {config.data.image_size}x{config.data.image_size}")
     print(f"Model: NCSNv2Deeper (ngf={config.model.ngf})")
+    if use_amp:
+        print(f"Precision: mixed (float16 + float32)")
     print()
 
     if args.task == 'train':
