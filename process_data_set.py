@@ -7,7 +7,7 @@ from pathlib import Path
 # max amount of images to process
 MAX_TRAIN_IMAGE = 10742 # Max is around 10700
 MAX_TEST_IMAGE = 1144
-CLEAN_TRAIN_DIRS_FIRST = False # Set to True to clean the directories before processing the images
+CLEAN_TRAIN_DIRS_FIRST = True # Set to True to clean the directories before processing the images
 CLEAN_TEST_DIRS_FIRST = True
 
 task = 'normal'
@@ -18,8 +18,6 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 print("Configuration:")
 for k, v in config.items():
     print(f"{k}: {v}")
-
-
 
 # Resolution of the images
 # 1. High resolution (HR)
@@ -35,8 +33,8 @@ low_reduce_factor = 16
 reduce_factors = [1, frikandel_reduce_factor, half_reduce_factor, medium_reduce_factor, low_reduce_factor]
 
 # Dir paths
-#data_dir = Path("images/data/data")
-#data_val_dir = Path("images/data/data_val")
+data_dir = Path("images/data/data")
+data_val_dir = Path("images/data/data_val")
 HR_train_data_output_dir = Path("./images/high_res_train")
 HR_test_data_output_dir = Path("./images/high_res_test")
 frikandel_train_data_output_dir = Path("./images/frikandel_train")
@@ -77,7 +75,6 @@ if task == 'square':
     LR_train_data_output_dir = Path("./images-square/low_res_train")
     LR_test_data_output_dir = Path("./images-square/low_res_test")
     
-
 # Put these paths in lists per train/test to make it easier to iterate over them
 output_train_dirs = [HR_train_data_output_dir, frikandel_train_data_output_dir, half_train_data_output_dir, MR_train_data_output_dir, LR_train_data_output_dir]
 output_test_dirs = [HR_test_data_output_dir, frikandel_test_data_output_dir, half_test_data_output_dir, MR_test_data_output_dir, LR_test_data_output_dir]

@@ -1,0 +1,46 @@
+# Score model: 352x352 (trained on frikandel_res, ~83M params)
+# Reconstruction: 44x44 -> 352x352 (8x upsampling)
+# Note: 352 is the nearest multiple of 16 to frikandel's native 362
+
+training:
+  batch_size: 2
+  n_epochs: 200
+  snapshot_freq: 10
+  anneal_power: 2
+  log_all_sigmas: false
+
+sampling:
+  step_lr: 0.0000062
+  n_steps_each: 5
+  denoise: true
+
+data:
+  image_size: 352
+  channels: 1
+  logit_transform: false
+  rescaled: false
+  hr_train_dir: images/frikandel_train
+  hr_test_dir: images/frikandel_test
+
+model:
+  sigma_begin: 50
+  sigma_end: 0.01
+  num_classes: 232
+  sigma_dist: geometric
+  ngf: 128
+  normalization: InstanceNorm++
+  nonlinearity: elu
+  ema: true
+  ema_rate: 0.999
+
+optim:
+  optimizer: Adam
+  lr: 0.0001
+  weight_decay: 0.0
+  beta1: 0.9
+  amsgrad: false
+  eps: 0.001
+
+reconstruction:
+  measurement_size: 44
+  likelihood_weight: 0.5

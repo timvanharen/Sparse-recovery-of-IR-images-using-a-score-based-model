@@ -1,0 +1,45 @@
+# Score model: 64x64 (trained on half_res, ~47M params)
+# Reconstruction: 8x8 -> 64x64 (8x upsampling)
+
+training:
+  batch_size: 16
+  n_epochs: 150
+  snapshot_freq: 10
+  anneal_power: 2
+  log_all_sigmas: false
+
+sampling:
+  step_lr: 0.0000062
+  n_steps_each: 5
+  denoise: true
+
+data:
+  image_size: 64
+  channels: 1
+  logit_transform: false
+  rescaled: false
+  hr_train_dir: images/half_res_train
+  hr_test_dir: images/half_res_test
+
+model:
+  sigma_begin: 50
+  sigma_end: 0.01
+  num_classes: 232
+  sigma_dist: geometric
+  ngf: 96
+  normalization: InstanceNorm++
+  nonlinearity: elu
+  ema: true
+  ema_rate: 0.999
+
+optim:
+  optimizer: Adam
+  lr: 0.0001
+  weight_decay: 0.0
+  beta1: 0.9
+  amsgrad: false
+  eps: 0.001
+
+reconstruction:
+  measurement_size: 8
+  likelihood_weight: 0.5
